@@ -72,6 +72,9 @@
 		<member name="needs_separate_specular" type="bool" setter="set_needs_separate_specular" getter="get_needs_separate_specular">
 			If [code]true[/code] this triggers specular data being rendered to a separate buffer and combined after effects have been applied, only applicable for the Forward+ renderer.
 		</member>
+		<member name="provides_indirect_light" type="bool" setter="set_provides_indirect_light" getter="get_provides_indirect_light" default="false">
+			If [code]true[/code], this effect supplies indirect lighting for opaque geometry (Forward+ only, ignored while SDFGI or VoxelGI is active). The renderer forces a depth/normal-roughness prepass and allocates full-resolution [code]R16G16B16A16_SFLOAT[/code] storage textures [code]"ambient"[/code] and [code]"reflection"[/code] in the [code]"rbgi"[/code] context of [RenderSceneBuffersRD]. A [constant EFFECT_CALLBACK_TYPE_PRE_OPAQUE] callback must write both every frame. In the opaque pass, [code]ambient.rgb[/code] replaces the environment ambient light and [code]reflection.rgb[/code] replaces the indirect specular light, each blended by its alpha channel ([code]mix(builtin, buffer.rgb, buffer.a)[/code]).
+		</member>
 	</members>
 	<constants>
 		<constant name="EFFECT_CALLBACK_TYPE_PRE_OPAQUE" value="0" enum="EffectCallbackType">

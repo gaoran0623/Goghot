@@ -59,6 +59,7 @@ private:
 	bool needs_motion_vectors = false;
 	bool needs_normal_roughness = false;
 	bool needs_separate_specular = false;
+	bool provides_indirect_light = false;
 
 protected:
 	static void _bind_methods();
@@ -91,6 +92,9 @@ public:
 
 	void set_needs_separate_specular(bool p_enabled);
 	bool get_needs_separate_specular() const;
+
+	void set_provides_indirect_light(bool p_enabled);
+	bool get_provides_indirect_light() const;
 
 	CompositorEffect();
 	~CompositorEffect();

@@ -65,6 +65,10 @@ void CompositorEffect::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_needs_separate_specular"), &CompositorEffect::get_needs_separate_specular);
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "needs_separate_specular"), "set_needs_separate_specular", "get_needs_separate_specular");
 
+	ClassDB::bind_method(D_METHOD("set_provides_indirect_light", "enable"), &CompositorEffect::set_provides_indirect_light);
+	ClassDB::bind_method(D_METHOD("get_provides_indirect_light"), &CompositorEffect::get_provides_indirect_light);
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "provides_indirect_light"), "set_provides_indirect_light", "get_provides_indirect_light");
+
 	BIND_ENUM_CONSTANT(EFFECT_CALLBACK_TYPE_PRE_OPAQUE)
 	BIND_ENUM_CONSTANT(EFFECT_CALLBACK_TYPE_POST_OPAQUE)
 	BIND_ENUM_CONSTANT(EFFECT_CALLBACK_TYPE_POST_SKY)
@@ -186,6 +190,19 @@ void CompositorEffect::set_needs_separate_specular(bool p_enabled) {
 
 bool CompositorEffect::get_needs_separate_specular() const {
 	return needs_separate_specular;
+}
+
+void CompositorEffect::set_provides_indirect_light(bool p_enabled) {
+	provides_indirect_light = p_enabled;
+	if (rid.is_valid()) {
+		RenderingServer *rs = RenderingServer::get_singleton();
+		ERR_FAIL_NULL(rs);
+		rs->compositor_effect_set_flag(rid, RSE::CompositorEffectFlags::COMPOSITOR_EFFECT_FLAG_PROVIDES_INDIRECT_LIGHT, provides_indirect_light);
+	}
+}
+
+bool CompositorEffect::get_provides_indirect_light() const {
+	return provides_indirect_light;
 }
 
 CompositorEffect::CompositorEffect() {
