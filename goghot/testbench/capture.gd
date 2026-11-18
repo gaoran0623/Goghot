@@ -1,0 +1,258 @@
+# Renders one test-bench scene along its fixed camera path and writes PNG frames + timings.
+#
+# Usage (normally called by tools/run.py):
+#   godot --path goghot/testbench --rendering-driver vulkan --resolution 960x540 \
+#         --script res://capture.gd -- <scene.json> <out_dir>
+#         [gi_mode] [exposure]
+# gi_mode: baseline (flat ambient, default) | inject_identity | inject_red (engine patch 1 checks)
+# exposure: fixed (default, exposure 1, comparable to Cycles) | auto (histogram auto exposure, GDScript proto) | auto_cpp (GDExtension)
+#
+# Scene JSON is shared with tools/blender_ref.py so Godot and Cycles build the same scene.
+# Light units (non-physical Godot mode):
+#   sun.energy E   -> Godot DirectionalLight3D.light_energy = E   (Cycles sun strength = pi * E)
+#   point.energy E -> Godot OmniLight3D energy E, inverse-square   (Cycles point power = 4 * pi^2 * E)
+#   emission c * s -> radiance c * s in both
+#   sky color L    -> background radiance L in both
+extends SceneTree
+
+const WARMUP_FRAMES := 20
+
+var spec: Dictionary
+var camera: Camera3D
+var env: Environment
+var light_nodes := [] # [Light3D, spec dict]
+var gi_mode := "baseline"
+var exposure_mode := "fixed"
+var inject_effect: CompositorEffect
+var exposure_effect: CompositorEffect
+
+
+func _v3(a: Array) -> Vector3:
+	return Vector3(a[0], a[1], a[2])
+
+
+# Spec colors are linear (like Cycles). Godot Color properties are sRGB-encoded, so convert.
+func _col(a: Array) -> Color:
+	return Color(a[0], a[1], a[2]).linear_to_srgb()
+
+
+func _build(root: Node3D) -> void:
+	var mats := {}
+	for name in spec.materials:
+		var m: Dictionary = spec.materials[name]
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = _col(m.get("albedo", [0.8, 0.8, 0.8]))
+		mat.roughness = m.get("roughness", 1.0)
+		mat.metallic = m.get("metallic", 0.0)
+		mat.metallic_specular = 0.0 if m.get("specular", 0.0) == 0.0 else 0.5
+		if m.has("emission"):
+			mat.emission_enabled = true
+			mat.emission = _col(m.emission)
+			mat.emission_energy_multiplier = m.get("emission_strength", 1.0)
+		mats[name] = mat
+
+	for o: Dictionary in spec.objects:
+		var mi := MeshInstance3D.new()
+		match o.type:
+			"box":
+				var bm := BoxMesh.new()
+				bm.size = _v3(o.size)
+				mi.mesh = bm
+			_:
+				push_error("unknown object type " + str(o.type))
+				continue
+		mi.material_override = mats[o.material]
+		mi.position = _v3(o.center)
+		mi.rotation_degrees.y = o.get("rot_y", 0.0)
+		root.add_child(mi)
+
+	for l: Dictionary in spec.lights:
+		var node: Light3D
+		match l.type:
+			"sun":
+				var d := DirectionalLight3D.new()
+				d.light_angular_distance = 0.5
+				node = d
+			"point":
+				var p := OmniLight3D.new()
+				p.omni_attenuation = 2.0 # inverse-square, to match Cycles
+				p.omni_range = 100.0
+				node = p
+			_:
+				push_error("unknown light type " + str(l.type))
+				continue
+		node.shadow_enabled = true
+		root.add_child(node)
+		light_nodes.append([node, l])
+
+	env = Environment.new()
+	env.background_mode = Environment.BG_COLOR
+	# Baseline "no GI": flat, unoccluded ambient equal to the sky radiance. GI work replaces this.
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	env.ambient_light_energy = 1.0
+	env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
+	env.tonemap_mode = Environment.TONE_MAPPER_LINEAR
+	env.tonemap_exposure = 1.0
+	if spec.has("fog"):
+		# Godot: extinction = density, scattering = albedo * density (matches Cycles scatter+absorption).
+		var fog: Dictionary = spec.fog
+		env.volumetric_fog_enabled = true
+		env.volumetric_fog_density = fog.density
+		env.volumetric_fog_albedo = _col(fog.get("albedo", [1, 1, 1]))
+		env.volumetric_fog_anisotropy = fog.get("anisotropy", 0.0)
+		env.volumetric_fog_length = fog.get("length", 150.0)
+		env.volumetric_fog_ambient_inject = 1.0
+		env.volumetric_fog_sky_affect = 1.0
+		env.volumetric_fog_temporal_reprojection_enabled = true
+	var we := WorldEnvironment.new()
+	we.environment = env
+	var effects := []
+	if gi_mode.begins_with("inject_"):
+		# Engine patch 1 validation (see gi_inject_test.gd).
+		inject_effect = load("res://gi_inject_test.gd").new()
+		effects.append(inject_effect)
+	elif gi_mode != "baseline":
+		push_error("unknown gi mode " + gi_mode)
+	if exposure_mode == "auto" or exposure_mode == "auto_cpp":
+		if exposure_mode == "auto_cpp":
+			exposure_effect = ClassDB.instantiate("GoghotHistogramExposure") # GDExtension (addons/goghot)
+		else:
+			exposure_effect = load("res://proto/histogram_exposure.gd").new() # GDScript prototype
+		exposure_effect.fixed_dt = 1.0 / 60.0 # deterministic adaptation per captured frame
+		effects.append(exposure_effect)
+	elif exposure_mode != "fixed":
+		push_error("unknown exposure mode " + exposure_mode)
+	if not effects.is_empty():
+		var comp := Compositor.new()
+		comp.compositor_effects = effects
+		we.compositor = comp
+	root.add_child(we)
+	_apply_frame(0)
+
+	camera = Camera3D.new()
+	camera.fov = spec.camera.get("fov_y", 50.0)
+	camera.near = 0.05
+	camera.far = 500.0
+	root.add_child(camera)
+	camera.current = true
+
+
+# Value of `field` at frame f. Objects may carry "keys": [{"frame": F, <field>: value}, ...]
+# (linear interpolation, clamped). Must match tools/blender_ref.py keyed().
+func _keyed(o: Dictionary, field: String, f: int) -> Variant:
+	var keys: Array = o.get("keys", []).filter(func(k): return k.has(field))
+	if keys.is_empty():
+		return o[field]
+	if f <= keys[0].frame:
+		return keys[0][field]
+	for i in range(1, keys.size()):
+		if f <= keys[i].frame:
+			var t := float(f - keys[i - 1].frame) / float(keys[i].frame - keys[i - 1].frame)
+			var a = keys[i - 1][field]
+			var b = keys[i][field]
+			if a is Array:
+				return range(a.size()).map(func(k): return lerpf(a[k], b[k], t))
+			return lerpf(a, b, t)
+	return keys[-1][field]
+
+
+func _apply_frame(f: int) -> void:
+	for pair in light_nodes:
+		var node: Light3D = pair[0]
+		var l: Dictionary = pair[1]
+		node.light_color = _col(_keyed(l, "color", f))
+		node.light_energy = _keyed(l, "energy", f)
+		if node is DirectionalLight3D:
+			var dir := _v3(_keyed(l, "direction", f)).normalized()
+			node.look_at_from_position(Vector3.ZERO, dir, Vector3.UP if absf(dir.y) < 0.99 else Vector3.FORWARD)
+		else:
+			node.position = _v3(_keyed(l, "position", f))
+	var sky_col := _col(_keyed(spec.sky, "color", f))
+	env.background_color = sky_col
+	env.ambient_light_color = sky_col
+	if inject_effect:
+		var lin: Array = _keyed(spec.sky, "color", f)
+		inject_effect.ambient = Color(lin[0], lin[1], lin[2]) if gi_mode == "inject_identity" else Color(1.0, 0.0, 0.0)
+
+
+# Returns [position, target] for frame index f.
+func _camera_at(f: int) -> Array:
+	var path: Array = spec.camera.path
+	var hold: int = spec.camera.get("hold_frames", 0)
+	if f < hold or path.size() == 1:
+		return [_v3(path[0].position), _v3(path[0].target)]
+	f -= hold
+	for i in range(1, path.size()):
+		var n: int = path[i].frames
+		if f <= n:
+			var t := float(f) / n
+			t = t * t * (3.0 - 2.0 * t)
+			return [_v3(path[i - 1].position).lerp(_v3(path[i].position), t), _v3(path[i - 1].target).lerp(_v3(path[i].target), t)]
+		f -= n
+	return [_v3(path[-1].position), _v3(path[-1].target)]
+
+
+func _total_frames() -> int:
+	var n: int = spec.camera.get("hold_frames", 0)
+	for i in range(1, spec.camera.path.size()):
+		n += int(spec.camera.path[i].frames)
+	return max(n, 1)
+
+
+func _initialize() -> void:
+	var args := OS.get_cmdline_user_args()
+	if args.size() < 2:
+		printerr("usage: -- <scene.json> <out_dir>")
+		quit(2)
+		return
+	spec = JSON.parse_string(FileAccess.get_file_as_string(args[0]))
+	if spec == null:
+		printerr("cannot parse ", args[0])
+		quit(2)
+		return
+	var out_dir: String = args[1]
+	if args.size() > 2:
+		gi_mode = args[2]
+	if args.size() > 3:
+		exposure_mode = args[3]
+	DirAccess.make_dir_recursive_absolute(out_dir)
+
+	var root := Node3D.new()
+	get_root().add_child(root)
+	_build(root)
+	_run.call_deferred(out_dir)
+
+
+func _run(out_dir: String) -> void:
+	var vp_rid := get_root().get_viewport_rid()
+	RenderingServer.viewport_set_measure_render_time(vp_rid, true)
+
+	var n := _total_frames()
+	var gpu_ms := []
+	for f in range(-WARMUP_FRAMES, n):
+		var pt := _camera_at(max(f, 0))
+		camera.look_at_from_position(pt[0], pt[1], Vector3.UP)
+		_apply_frame(max(f, 0))
+		if f == -1 and exposure_effect:
+			exposure_effect.snap = true # warmup done (fog/TAA converged): start the capture adapted
+		await RenderingServer.frame_post_draw
+		if f < 0:
+			continue
+		gpu_ms.append(RenderingServer.viewport_get_measured_render_time_gpu(vp_rid))
+		var img := get_root().get_texture().get_image()
+		img.save_png(out_dir.path_join("frame_%04d.png" % f))
+
+	var meta := {
+		"frames": n,
+		"hold_frames": spec.camera.get("hold_frames", 0),
+		"resolution": [get_root().size.x, get_root().size.y],
+		"gpu_ms": gpu_ms,
+		"device": RenderingServer.get_video_adapter_name(),
+		"gi_mode": gi_mode,
+		"exposure": exposure_mode,
+	}
+	var fa := FileAccess.open(out_dir.path_join("capture.json"), FileAccess.WRITE)
+	fa.store_string(JSON.stringify(meta, "\t"))
+	fa.close()
+	print("CAPTURE: wrote %d frames to %s" % [n, out_dir])
+	quit(0)

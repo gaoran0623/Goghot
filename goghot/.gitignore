@@ -1,0 +1,10 @@
+# Raw frame sequences and logs are large; keep only summaries, compare sheets and FLIP maps.
+reports/*/*/frames/
+reports/*/logs/
+testbench/.refcache/
+testbench/.godot/
+demos/*/.godot/
+testbench/addons/goghot/bin/
+gen/
+# Root .gitignore ignores extension_api.json; ours is the API dump of the patched engine and is needed to build.
+!api/extension_api.json

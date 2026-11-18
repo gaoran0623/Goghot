@@ -1,0 +1,35 @@
+#!/usr/bin/env python
+# Goghot GDExtension. Build from repo root or here:
+#   python -m SCons -C goghot target=template_debug -j11
+# Bindings are generated from goghot/api/ (dumped from *our* patched engine; re-dump when engine patches change:
+#   cd goghot/api && ../../bin/godot.windows.editor.dev.x86_64.console.exe --headless --dump-extension-api --dump-gdextension-interface-json)
+import os
+
+# godot-cpp reads its options from ARGUMENTS; point it at our engine's API dump unless overridden.
+ARGUMENTS.setdefault("gdextension_dir", Dir("api").abspath)
+ARGUMENTS.setdefault("custom_api_file", File("api/extension_api.json").abspath)
+env = SConscript("thirdparty/godot-cpp/SConstruct")
+
+
+# Embed GLSL sources as C++ raw string literals: src/foo/bar.glsl -> gen/foo/bar.glsl.gen.h (const char *BAR_GLSL).
+def embed_glsl(target, source, env):
+    for t, s in zip(target, source):
+        name = os.path.basename(str(s)).replace(".", "_").upper()
+        text = open(str(s), encoding="utf-8").read()
+        os.makedirs(os.path.dirname(str(t)), exist_ok=True)
+        with open(str(t), "w", encoding="utf-8", newline="\n") as f:
+            f.write("// Generated from %s, do not edit.\n#pragma once\n" % os.path.basename(str(s)))
+            f.write('static const char *%s = R"GLSL(%s)GLSL";\n' % (name, text))
+
+
+glsl = Glob("src/*/*.glsl")
+headers = [env.Command(File("gen/" + os.path.relpath(str(g), "src") + ".gen.h"), g, embed_glsl) for g in glsl]
+
+env.Append(CPPPATH=["src/", "gen/"])
+sources = Glob("src/*.cpp") + Glob("src/*/*.cpp")
+env.Depends(sources, headers)
+
+out = "testbench/addons/goghot/bin/goghot{}{}".format(env["suffix"], env["SHLIBSUFFIX"])
+library = env.SharedLibrary(out, source=sources)
+env.NoCache(library)
+Default(library)

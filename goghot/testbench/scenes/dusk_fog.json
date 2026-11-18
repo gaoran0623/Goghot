@@ -1,0 +1,297 @@
+{
+	"description": "Dusk: low orange sun behind a colonnade, homogeneous volumetric fog, dim sky. Tests fog GI / light shafts, low-angle sun, low exposure.",
+	"sky": {
+		"color": [
+			0.06,
+			0.06,
+			0.1
+		]
+	},
+	"materials": {
+		"white": {
+			"albedo": [
+				0.7,
+				0.7,
+				0.7
+			]
+		},
+		"floor": {
+			"albedo": [
+				0.45,
+				0.3,
+				0.2
+			]
+		},
+		"grass": {
+			"albedo": [
+				0.15,
+				0.3,
+				0.08
+			]
+		},
+		"concrete": {
+			"albedo": [
+				0.5,
+				0.5,
+				0.48
+			]
+		},
+		"blue": {
+			"albedo": [
+				0.1,
+				0.2,
+				0.6
+			]
+		},
+		"red": {
+			"albedo": [
+				0.6,
+				0.1,
+				0.08
+			]
+		}
+	},
+	"objects": [
+		{
+			"type": "box",
+			"center": [
+				0,
+				-0.05,
+				0
+			],
+			"size": [
+				120,
+				0.1,
+				120
+			],
+			"material": "grass"
+		},
+		{
+			"type": "box",
+			"center": [
+				-10.0,
+				3,
+				-6
+			],
+			"size": [
+				0.6,
+				6,
+				0.6
+			],
+			"material": "concrete"
+		},
+		{
+			"type": "box",
+			"center": [
+				-7.5,
+				3,
+				-6
+			],
+			"size": [
+				0.6,
+				6,
+				0.6
+			],
+			"material": "concrete"
+		},
+		{
+			"type": "box",
+			"center": [
+				-5.0,
+				3,
+				-6
+			],
+			"size": [
+				0.6,
+				6,
+				0.6
+			],
+			"material": "concrete"
+		},
+		{
+			"type": "box",
+			"center": [
+				-2.5,
+				3,
+				-6
+			],
+			"size": [
+				0.6,
+				6,
+				0.6
+			],
+			"material": "concrete"
+		},
+		{
+			"type": "box",
+			"center": [
+				0.0,
+				3,
+				-6
+			],
+			"size": [
+				0.6,
+				6,
+				0.6
+			],
+			"material": "concrete"
+		},
+		{
+			"type": "box",
+			"center": [
+				2.5,
+				3,
+				-6
+			],
+			"size": [
+				0.6,
+				6,
+				0.6
+			],
+			"material": "concrete"
+		},
+		{
+			"type": "box",
+			"center": [
+				5.0,
+				3,
+				-6
+			],
+			"size": [
+				0.6,
+				6,
+				0.6
+			],
+			"material": "concrete"
+		},
+		{
+			"type": "box",
+			"center": [
+				7.5,
+				3,
+				-6
+			],
+			"size": [
+				0.6,
+				6,
+				0.6
+			],
+			"material": "concrete"
+		},
+		{
+			"type": "box",
+			"center": [
+				10.0,
+				3,
+				-6
+			],
+			"size": [
+				0.6,
+				6,
+				0.6
+			],
+			"material": "concrete"
+		},
+		{
+			"type": "box",
+			"center": [
+				0,
+				6.3,
+				-6
+			],
+			"size": [
+				24,
+				0.6,
+				1.2
+			],
+			"material": "concrete"
+		},
+		{
+			"type": "box",
+			"center": [
+				-8,
+				4,
+				4
+			],
+			"size": [
+				4,
+				8,
+				6
+			],
+			"material": "concrete"
+		},
+		{
+			"type": "box",
+			"center": [
+				9,
+				2.5,
+				2
+			],
+			"size": [
+				4,
+				5,
+				4
+			],
+			"material": "white",
+			"rot_y": -10
+		}
+	],
+	"fog": {
+		"density": 0.02,
+		"albedo": [
+			0.9,
+			0.9,
+			0.9
+		],
+		"anisotropy": 0.5,
+		"length": 60
+	},
+	"lights": [
+		{
+			"type": "sun",
+			"direction": [
+				0.15,
+				-0.14,
+				0.98
+			],
+			"color": [
+				1.0,
+				0.55,
+				0.25
+			],
+			"energy": 2.0
+		}
+	],
+	"camera": {
+		"fov_y": 60,
+		"hold_frames": 30,
+		"path": [
+			{
+				"position": [
+					0,
+					1.7,
+					12
+				],
+				"target": [
+					0,
+					3,
+					-10
+				],
+				"frames": 0
+			},
+			{
+				"position": [
+					5,
+					2.2,
+					8
+				],
+				"target": [
+					-2,
+					3,
+					-10
+				],
+				"frames": 60
+			}
+		]
+	}
+}

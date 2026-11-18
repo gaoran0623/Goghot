@@ -1,0 +1,255 @@
+{
+	"description": "Static camera, sun and sky animate noon -> sunset -> night, a street lamp stays on. Tests temporal response to lighting change (lag/ghosting), huge exposure range.",
+	"sky": {
+		"color": [
+			0.35,
+			0.5,
+			0.8
+		],
+		"keys": [
+			{
+				"frame": 30,
+				"color": [
+					0.35,
+					0.5,
+					0.8
+				]
+			},
+			{
+				"frame": 90,
+				"color": [
+					0.35,
+					0.22,
+					0.15
+				]
+			},
+			{
+				"frame": 130,
+				"color": [
+					0.004,
+					0.006,
+					0.012
+				]
+			}
+		]
+	},
+	"materials": {
+		"white": {
+			"albedo": [
+				0.7,
+				0.7,
+				0.7
+			]
+		},
+		"floor": {
+			"albedo": [
+				0.45,
+				0.3,
+				0.2
+			]
+		},
+		"grass": {
+			"albedo": [
+				0.15,
+				0.3,
+				0.08
+			]
+		},
+		"concrete": {
+			"albedo": [
+				0.5,
+				0.5,
+				0.48
+			]
+		},
+		"blue": {
+			"albedo": [
+				0.1,
+				0.2,
+				0.6
+			]
+		},
+		"red": {
+			"albedo": [
+				0.6,
+				0.1,
+				0.08
+			]
+		}
+	},
+	"objects": [
+		{
+			"type": "box",
+			"center": [
+				0,
+				-0.05,
+				0
+			],
+			"size": [
+				80,
+				0.1,
+				80
+			],
+			"material": "grass"
+		},
+		{
+			"type": "box",
+			"center": [
+				-4,
+				3,
+				-6
+			],
+			"size": [
+				4,
+				6,
+				4
+			],
+			"material": "concrete"
+		},
+		{
+			"type": "box",
+			"center": [
+				3,
+				1.5,
+				-4
+			],
+			"size": [
+				3,
+				3,
+				3
+			],
+			"material": "white",
+			"rot_y": 20
+		},
+		{
+			"type": "box",
+			"center": [
+				0,
+				0.5,
+				0
+			],
+			"size": [
+				1,
+				1,
+				1
+			],
+			"material": "blue",
+			"rot_y": 45
+		},
+		{
+			"type": "box",
+			"center": [
+				1.5,
+				1.5,
+				-1.5
+			],
+			"size": [
+				0.15,
+				3,
+				0.15
+			],
+			"material": "concrete"
+		}
+	],
+	"lights": [
+		{
+			"type": "sun",
+			"direction": [
+				-0.3,
+				-0.9,
+				-0.3
+			],
+			"color": [
+				1.0,
+				0.95,
+				0.85
+			],
+			"energy": 1.2,
+			"keys": [
+				{
+					"frame": 30,
+					"direction": [
+						-0.3,
+						-0.9,
+						-0.3
+					],
+					"color": [
+						1.0,
+						0.95,
+						0.85
+					],
+					"energy": 1.2
+				},
+				{
+					"frame": 90,
+					"direction": [
+						-0.92,
+						-0.08,
+						-0.38
+					],
+					"color": [
+						1.0,
+						0.45,
+						0.15
+					],
+					"energy": 0.8
+				},
+				{
+					"frame": 115,
+					"direction": [
+						-0.92,
+						0.05,
+						-0.38
+					],
+					"energy": 0.0
+				}
+			]
+		},
+		{
+			"type": "point",
+			"position": [
+				1.5,
+				2.9,
+				-1.2
+			],
+			"color": [
+				1.0,
+				0.75,
+				0.45
+			],
+			"energy": 0.6
+		}
+	],
+	"camera": {
+		"fov_y": 55,
+		"hold_frames": 30,
+		"path": [
+			{
+				"position": [
+					0,
+					1.7,
+					8
+				],
+				"target": [
+					0,
+					1.5,
+					-4
+				],
+				"frames": 0
+			},
+			{
+				"position": [
+					0,
+					1.7,
+					8
+				],
+				"target": [
+					0,
+					1.5,
+					-4
+				],
+				"frames": 120
+			}
+		]
+	}
+}

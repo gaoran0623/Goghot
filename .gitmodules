@@ -1,0 +1,3 @@
+[submodule "goghot/thirdparty/godot-cpp"]
+	path = goghot/thirdparty/godot-cpp
+	url = https://github.com/godotengine/godot-cpp.git

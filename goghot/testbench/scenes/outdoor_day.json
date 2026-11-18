@@ -1,0 +1,169 @@
+{
+	"description": "Open daylight: ground, buildings, sun + uniform sky. Tests sky occlusion and outdoor exposure.",
+	"sky": {
+		"color": [
+			0.35,
+			0.5,
+			0.8
+		]
+	},
+	"materials": {
+		"white": {
+			"albedo": [
+				0.7,
+				0.7,
+				0.7
+			]
+		},
+		"floor": {
+			"albedo": [
+				0.45,
+				0.3,
+				0.2
+			]
+		},
+		"grass": {
+			"albedo": [
+				0.15,
+				0.3,
+				0.08
+			]
+		},
+		"concrete": {
+			"albedo": [
+				0.5,
+				0.5,
+				0.48
+			]
+		},
+		"blue": {
+			"albedo": [
+				0.1,
+				0.2,
+				0.6
+			]
+		}
+	},
+	"objects": [
+		{
+			"type": "box",
+			"center": [
+				0,
+				-0.05,
+				0
+			],
+			"size": [
+				80,
+				0.1,
+				80
+			],
+			"material": "grass"
+		},
+		{
+			"type": "box",
+			"center": [
+				-4,
+				3,
+				-6
+			],
+			"size": [
+				4,
+				6,
+				4
+			],
+			"material": "concrete"
+		},
+		{
+			"type": "box",
+			"center": [
+				3,
+				1.5,
+				-4
+			],
+			"size": [
+				3,
+				3,
+				3
+			],
+			"material": "white",
+			"rot_y": 20
+		},
+		{
+			"type": "box",
+			"center": [
+				0,
+				0.5,
+				0
+			],
+			"size": [
+				1,
+				1,
+				1
+			],
+			"material": "blue",
+			"rot_y": 45
+		},
+		{
+			"type": "box",
+			"center": [
+				5,
+				4,
+				-12
+			],
+			"size": [
+				6,
+				8,
+				4
+			],
+			"material": "concrete"
+		}
+	],
+	"lights": [
+		{
+			"type": "sun",
+			"direction": [
+				-0.5,
+				-0.6,
+				-0.62
+			],
+			"color": [
+				1.0,
+				0.95,
+				0.85
+			],
+			"energy": 1.2
+		}
+	],
+	"camera": {
+		"fov_y": 55,
+		"hold_frames": 30,
+		"path": [
+			{
+				"position": [
+					0,
+					1.7,
+					8
+				],
+				"target": [
+					0,
+					1.5,
+					-4
+				],
+				"frames": 0
+			},
+			{
+				"position": [
+					4,
+					2.5,
+					5
+				],
+				"target": [
+					-2,
+					1.5,
+					-5
+				],
+				"frames": 60
+			}
+		]
+	}
+}

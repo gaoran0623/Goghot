@@ -1,0 +1,286 @@
+{
+	"description": "Room with a single door to a sunny outside; camera walks out through the door. Tests indoor->outdoor exposure/GI transition, sky leak indoors, temporal lag when visibility changes abruptly.",
+	"sky": {
+		"color": [
+			0.35,
+			0.5,
+			0.8
+		]
+	},
+	"materials": {
+		"white": {
+			"albedo": [
+				0.7,
+				0.7,
+				0.7
+			]
+		},
+		"floor": {
+			"albedo": [
+				0.45,
+				0.3,
+				0.2
+			]
+		},
+		"grass": {
+			"albedo": [
+				0.15,
+				0.3,
+				0.08
+			]
+		},
+		"concrete": {
+			"albedo": [
+				0.5,
+				0.5,
+				0.48
+			]
+		},
+		"blue": {
+			"albedo": [
+				0.1,
+				0.2,
+				0.6
+			]
+		},
+		"red": {
+			"albedo": [
+				0.6,
+				0.1,
+				0.08
+			]
+		}
+	},
+	"objects": [
+		{
+			"type": "box",
+			"center": [
+				0,
+				-0.1,
+				-2
+			],
+			"size": [
+				6.4,
+				0.2,
+				4.4
+			],
+			"material": "floor"
+		},
+		{
+			"type": "box",
+			"center": [
+				0,
+				3.1,
+				-2
+			],
+			"size": [
+				6.4,
+				0.2,
+				4.4
+			],
+			"material": "white"
+		},
+		{
+			"type": "box",
+			"center": [
+				0,
+				1.5,
+				-4.1
+			],
+			"size": [
+				6,
+				3,
+				0.2
+			],
+			"material": "white"
+		},
+		{
+			"type": "box",
+			"center": [
+				-3.1,
+				1.5,
+				-2
+			],
+			"size": [
+				0.2,
+				3,
+				4
+			],
+			"material": "white"
+		},
+		{
+			"type": "box",
+			"center": [
+				3.1,
+				1.5,
+				-2
+			],
+			"size": [
+				0.2,
+				3,
+				4
+			],
+			"material": "red"
+		},
+		{
+			"type": "box",
+			"center": [
+				-1.8,
+				1.5,
+				0.1
+			],
+			"size": [
+				2.4,
+				3,
+				0.2
+			],
+			"material": "white"
+		},
+		{
+			"type": "box",
+			"center": [
+				1.8,
+				1.5,
+				0.1
+			],
+			"size": [
+				2.4,
+				3,
+				0.2
+			],
+			"material": "white"
+		},
+		{
+			"type": "box",
+			"center": [
+				0,
+				2.55,
+				0.1
+			],
+			"size": [
+				1.2,
+				0.9,
+				0.2
+			],
+			"material": "white"
+		},
+		{
+			"type": "box",
+			"center": [
+				0,
+				-0.35,
+				10
+			],
+			"size": [
+				60,
+				0.1,
+				60
+			],
+			"material": "grass"
+		},
+		{
+			"type": "box",
+			"center": [
+				-2,
+				0.5,
+				-3
+			],
+			"size": [
+				1.4,
+				1.0,
+				0.8
+			],
+			"material": "blue"
+		},
+		{
+			"type": "box",
+			"center": [
+				4,
+				2,
+				8
+			],
+			"size": [
+				3,
+				4,
+				3
+			],
+			"material": "concrete",
+			"rot_y": 15
+		},
+		{
+			"type": "box",
+			"center": [
+				-5,
+				3,
+				12
+			],
+			"size": [
+				4,
+				6,
+				4
+			],
+			"material": "concrete"
+		}
+	],
+	"lights": [
+		{
+			"type": "sun",
+			"direction": [
+				0.3,
+				-0.55,
+				-0.78
+			],
+			"color": [
+				1.0,
+				0.95,
+				0.85
+			],
+			"energy": 3.0
+		}
+	],
+	"camera": {
+		"fov_y": 65,
+		"hold_frames": 30,
+		"path": [
+			{
+				"position": [
+					0,
+					1.6,
+					-3.3
+				],
+				"target": [
+					0,
+					1.3,
+					2
+				],
+				"frames": 0
+			},
+			{
+				"position": [
+					0,
+					1.6,
+					1.0
+				],
+				"target": [
+					0.2,
+					1.5,
+					6
+				],
+				"frames": 90
+			},
+			{
+				"position": [
+					1.0,
+					1.6,
+					4.0
+				],
+				"target": [
+					3,
+					1.4,
+					12
+				],
+				"frames": 40
+			}
+		]
+	}
+}
