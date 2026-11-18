@@ -128,6 +128,10 @@ def metrics(frames_dir, ref_dir, spec, cap):
     gpu = np.array(cap["gpu_ms"][2:] or cap["gpu_ms"], dtype=np.float64)
     out["gpu_ms_mean"] = float(gpu.mean())
     out["gpu_ms_p95"] = float(np.percentile(gpu, 95))
+    # Goghot passes (RD timestamps); "goghot_ms" = sum of all goghot passes, the GI budget number.
+    passes = {k: np.array(v[2:] or v, dtype=np.float64) for k, v in cap.get("pass_ms", {}).items() if v}
+    out["pass_ms"] = {k: float(v.mean()) for k, v in passes.items()}
+    out["goghot_ms"] = float(sum(v.mean() for v in passes.values())) if passes else 0.0
     return out
 
 
@@ -147,6 +151,7 @@ def main():
     ap.add_argument("--no-ref", action="store_true", help="skip Cycles references (no FLIP/SSIM)")
     ap.add_argument("--exposure", default="fixed", choices=["fixed", "auto", "auto_cpp"],
                     help="auto = histogram auto exposure; FLIP/SSIM vs Cycles are skipped (not comparable), key metrics reported")
+    ap.add_argument("--gi-params", default="", help='JSON property overrides for the GI effect, e.g. {"probe_spacing": 16}')
     ap.add_argument("--gi", default="baseline", help="GI mode passed to capture.gd (baseline, inject_identity, inject_red, ...)")
     args = ap.parse_args()
     args.godot = str(Path(args.godot).resolve())
@@ -172,7 +177,7 @@ def main():
         frames_dir = report_dir / name / "frames"
         cmd = [args.godot, "--path", str(BENCH), "--rendering-driver", "vulkan",
                "--resolution", f"{args.width}x{args.height}", "--script", "res://capture.gd", "--",
-               str(scene_path), str(frames_dir), args.gi, args.exposure]
+               str(scene_path), str(frames_dir), args.gi, args.exposure, args.gi_params]
         rc = run(cmd, logs_dir / f"{name}_godot.log")
         cap_path = frames_dir / "capture.json"
         if rc != 0 or not cap_path.exists():
@@ -203,21 +208,22 @@ def main():
                 sheet.paste(t, (x, 0))
                 x += t.width
             sheet.save(report_dir / name / f"compare_{f:04d}.png")
-        print(f"[{name}] flip={fmt(m.get('flip'))} ssim={fmt(m.get('ssim'))} flicker={fmt(m.get('flicker'), '{:.3f}')} gpu={m['gpu_ms_mean']:.2f}ms")
+        print(f"[{name}] flip={fmt(m.get('flip'))} ssim={fmt(m.get('ssim'))} flicker={fmt(m.get('flicker'), '{:.3f}')} gpu={m['gpu_ms_mean']:.2f}ms goghot={m['goghot_ms']:.3f}ms")
 
     (report_dir / "results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
-    lines = [f"# Test bench: {args.tag} ({stamp}), GI `{args.gi}`, exposure `{args.exposure}`", "",
+    lines = [f"# Test bench: {args.tag} ({stamp}), GI `{args.gi}` {args.gi_params}, exposure `{args.exposure}`", "",
              f"Resolution {args.width}x{args.height}, Cycles {args.ref_samples} spp. "
              "Images: `<scene>/compare_NNNN.png` = Godot | Cycles | FLIP.", "",
-             "| scene | FLIP ↓ | SSIM ↑ | flicker ↓ (static, /255) | key mean [min, max] | GPU ms mean / p95 (whole frame) |",
-             "|---|---|---|---|---|---|"]
+             "| scene | FLIP ↓ | SSIM ↑ | flicker ↓ (static, /255) | key mean [min, max] | GPU ms mean / p95 (whole frame) | goghot passes ms |",
+             "|---|---|---|---|---|---|---|"]
     for name, m in results.items():
         if "error" in m:
-            lines.append(f"| {name} | error: {m['error']} | | | | |")
+            lines.append(f"| {name} | error: {m['error']} | | | | | |")
         else:
             lines.append(f"| {name} | {fmt(m.get('flip'))} | {fmt(m.get('ssim'))} | {fmt(m.get('flicker'), '{:.3f}')} | "
                          f"{m['key_mean']:.3f} [{m['key_min']:.3f}, {m['key_max']:.3f}] | "
-                         f"{m['gpu_ms_mean']:.2f} / {m['gpu_ms_p95']:.2f} |")
+                         f"{m['gpu_ms_mean']:.2f} / {m['gpu_ms_p95']:.2f} | "
+                         + (", ".join(f"{k} {v:.3f}" for k, v in m["pass_ms"].items()) or "—") + " |")
     (report_dir / "README.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"report: {report_dir}")
     return 0 if all("error" not in m for m in results.values()) else 1

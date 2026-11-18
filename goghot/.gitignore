@@ -8,3 +8,7 @@ testbench/addons/goghot/bin/
 gen/
 # Root .gitignore ignores extension_api.json; ours is the API dump of the patched engine and is needed to build.
 !api/extension_api.json
+# Parameter sweeps and scratch runs are not kept.
+reports/*_sweep/
+reports/*scratch*/
+reports/*_check/

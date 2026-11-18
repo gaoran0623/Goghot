@@ -4,7 +4,7 @@
 #   godot --path goghot/testbench --rendering-driver vulkan --resolution 960x540 \
 #         --script res://capture.gd -- <scene.json> <out_dir>
 #         [gi_mode] [exposure]
-# gi_mode: baseline (flat ambient, default) | inject_identity | inject_red (engine patch 1 checks)
+# gi_mode: baseline (flat ambient, default) | inject_identity | inject_red (engine patch 1 checks) | screen_probe (phase 2)
 # exposure: fixed (default, exposure 1, comparable to Cycles) | auto (histogram auto exposure, GDScript proto) | auto_cpp (GDExtension)
 #
 # Scene JSON is shared with tools/blender_ref.py so Godot and Cycles build the same scene.
@@ -15,7 +15,7 @@
 #   sky color L    -> background radiance L in both
 extends SceneTree
 
-const WARMUP_FRAMES := 20
+const WARMUP_FRAMES := 90 # long enough for GI history + multi-bounce feedback to converge (flicker = steady state)
 
 var spec: Dictionary
 var camera: Camera3D
@@ -25,6 +25,8 @@ var gi_mode := "baseline"
 var exposure_mode := "fixed"
 var inject_effect: CompositorEffect
 var exposure_effect: CompositorEffect
+var gi_effect: CompositorEffect
+var gi_params := {} # property overrides for the GI effect (bench experiments only)
 
 
 func _v3(a: Array) -> Vector3:
@@ -111,6 +113,12 @@ func _build(root: Node3D) -> void:
 		# Engine patch 1 validation (see gi_inject_test.gd).
 		inject_effect = load("res://gi_inject_test.gd").new()
 		effects.append(inject_effect)
+	elif gi_mode == "screen_probe":
+		gi_effect = ClassDB.instantiate("GoghotScreenProbeGI") # phase 2, GDExtension
+		for k in gi_params:
+			gi_effect.set(k, gi_params[k])
+		effects.append(gi_effect)
+		effects.append(gi_effect.create_color_capture())
 	elif gi_mode != "baseline":
 		push_error("unknown gi mode " + gi_mode)
 	if exposure_mode == "auto" or exposure_mode == "auto_cpp":
@@ -170,6 +178,9 @@ func _apply_frame(f: int) -> void:
 	var sky_col := _col(_keyed(spec.sky, "color", f))
 	env.background_color = sky_col
 	env.ambient_light_color = sky_col
+	if gi_effect:
+		var sky_lin: Array = _keyed(spec.sky, "color", f)
+		gi_effect.sky_color = Color(sky_lin[0], sky_lin[1], sky_lin[2]) # linear radiance for missed rays
 	if inject_effect:
 		var lin: Array = _keyed(spec.sky, "color", f)
 		inject_effect.ambient = Color(lin[0], lin[1], lin[2]) if gi_mode == "inject_identity" else Color(1.0, 0.0, 0.0)
@@ -190,6 +201,24 @@ func _camera_at(f: int) -> Array:
 			return [_v3(path[i - 1].position).lerp(_v3(path[i].position), t), _v3(path[i - 1].target).lerp(_v3(path[i].target), t)]
 		f -= n
 	return [_v3(path[-1].position), _v3(path[-1].target)]
+
+
+# GPU ms between "goghot_<pass>_begin" / "_end" timestamp pairs of the last measured frame.
+func _goghot_timings() -> Dictionary:
+	var rd := RenderingServer.get_rendering_device()
+	var begins := {}
+	var out := {}
+	for i in rd.get_captured_timestamps_count():
+		var name := rd.get_captured_timestamp_name(i)
+		if not name.begins_with("goghot_"):
+			continue
+		if name.ends_with("_begin"):
+			begins[name.trim_suffix("_begin")] = rd.get_captured_timestamp_gpu_time(i)
+		elif name.ends_with("_end"):
+			var key := name.trim_suffix("_end")
+			if begins.has(key):
+				out[key.trim_prefix("goghot_")] = (rd.get_captured_timestamp_gpu_time(i) - begins[key]) / 1e6
+	return out
 
 
 func _total_frames() -> int:
@@ -215,6 +244,8 @@ func _initialize() -> void:
 		gi_mode = args[2]
 	if args.size() > 3:
 		exposure_mode = args[3]
+	if args.size() > 4 and not args[4].is_empty():
+		gi_params = JSON.parse_string(args[4])
 	DirAccess.make_dir_recursive_absolute(out_dir)
 
 	var root := Node3D.new()
@@ -229,6 +260,7 @@ func _run(out_dir: String) -> void:
 
 	var n := _total_frames()
 	var gpu_ms := []
+	var pass_ms := {} # goghot pass name -> per-frame GPU ms (from RD timestamps)
 	for f in range(-WARMUP_FRAMES, n):
 		var pt := _camera_at(max(f, 0))
 		camera.look_at_from_position(pt[0], pt[1], Vector3.UP)
@@ -239,6 +271,11 @@ func _run(out_dir: String) -> void:
 		if f < 0:
 			continue
 		gpu_ms.append(RenderingServer.viewport_get_measured_render_time_gpu(vp_rid))
+		var marks := _goghot_timings()
+		for k in marks:
+			if not pass_ms.has(k):
+				pass_ms[k] = []
+			pass_ms[k].append(marks[k])
 		var img := get_root().get_texture().get_image()
 		img.save_png(out_dir.path_join("frame_%04d.png" % f))
 
@@ -247,9 +284,11 @@ func _run(out_dir: String) -> void:
 		"hold_frames": spec.camera.get("hold_frames", 0),
 		"resolution": [get_root().size.x, get_root().size.y],
 		"gpu_ms": gpu_ms,
+		"pass_ms": pass_ms,
 		"device": RenderingServer.get_video_adapter_name(),
 		"gi_mode": gi_mode,
 		"exposure": exposure_mode,
+		"gi_params": gi_params,
 	}
 	var fa := FileAccess.open(out_dir.path_join("capture.json"), FileAccess.WRITE)
 	fa.store_string(JSON.stringify(meta, "\t"))

@@ -131,6 +131,7 @@ void GoghotHistogramExposure::_render_callback(int32_t p_effect_callback_type, R
 	};
 
 	const Vector2i msize = (size + Vector2i(METER_STRIDE - 1, METER_STRIDE - 1)) / METER_STRIDE;
+	rd->capture_timestamp("goghot_exposure_begin");
 	const int64_t cl = rd->compute_list_begin();
 
 	// Meter view 0 only; apply the same exposure to all views.
@@ -153,6 +154,7 @@ void GoghotHistogramExposure::_render_callback(int32_t p_effect_callback_type, R
 		rd->compute_list_dispatch(cl, (size.x + 7) / 8, (size.y + 7) / 8, 1);
 	}
 	rd->compute_list_end();
+	rd->capture_timestamp("goghot_exposure_end");
 }
 
 void GoghotHistogramExposure::_notification(int p_what) {
