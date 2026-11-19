@@ -283,7 +283,9 @@ void GIWorldTracer::_rebuild_geometry(const GISceneSnapshot &p_snap) {
 	if (indices.empty()) {
 		return;
 	}
-	const auto build_input = RD::BUFFER_CREATION_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT;
+	// BLAS inputs: RD reads their device address (vkGetBufferDeviceAddress), so they need the device address
+	// flag too (without it the address is undefined: worked by luck, device lost on a large project).
+	const BitField<RD::BufferCreationBits> build_input = RD::BUFFER_CREATION_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT | RD::BUFFER_CREATION_DEVICE_ADDRESS_BIT;
 	PackedByteArray pos_bytes = bytes_of(positions);
 	PackedByteArray idx_bytes = bytes_of(indices);
 	if (build_rt) {
