@@ -198,8 +198,12 @@ void GIWorldTracer::_free_geometry() {
 	// deleted, engine shutdown) RD frees the BLAS with it, and there is no RD query for BLAS validity.
 	// So only free the ones whose instance is still alive (see p_alive), leave the rest to RD.
 	for (DeformedGPU &d : deformed) {
-		if (d.blas.is_valid() && alive_deformed.count(d.rs_instance.get_id())) {
-			rd->free_rid(d.blas);
+		if (alive_deformed.count(d.rs_instance.get_id())) {
+			for (RID &b : d.slot_blas) {
+				if (b.is_valid()) {
+					rd->free_rid(b);
+				}
+			}
 		}
 	}
 	deformed.clear();
@@ -341,46 +345,73 @@ void GIWorldTracer::_update_deformed(const GISceneSnapshot &p_snap, bool p_rt) {
 	if (deformed.empty()) {
 		return;
 	}
+	// Tier A: deformed BLASes are rebuilt round robin within deformed_triangle_budget triangles per
+	// frame (always at least one); the others keep their last build for a few frames (GI barely
+	// notices). Normals are decoded for the rebuilt ones only (they match their BLAS).
+	std::vector<RID> builds;
+	uint32_t budget_used = 0;
+	uint32_t built = 0;
+	const size_t n = deformed.size();
+	const size_t start = n > 0 ? deformed_cursor % n : 0;
+	size_t last_built = start;
 	const int64_t cl = rd->compute_list_begin();
 	rd->compute_list_bind_compute_pipeline(cl, skin_normals_pipeline);
-	for (DeformedGPU &d : deformed) {
+	for (size_t k = 0; k < n; k++) {
+		const size_t di = (start + k) % n;
+		DeformedGPU &d = deformed[di];
 		const GIMeshCPU &m = *p_snap.meshes[d.mesh];
-		bool changed = !d.blas.is_valid();
 		std::vector<RID> src(m.surfaces.size());
+		bool all_valid = true;
 		for (size_t s = 0; s < m.surfaces.size(); s++) {
 			src[s] = RenderingServer::get_singleton()->instance_surface_get_vertex_buffer_rd_rid(d.rs_instance, m.surfaces[s].source_surface);
-			changed = changed || src[s] != d.sources[s];
-		}
-		bool all_valid = true;
-		for (const RID &r : src) {
-			all_valid = all_valid && r.is_valid();
+			all_valid = all_valid && src[s].is_valid();
 		}
 		if (!all_valid) {
 			continue; // not deformed on the GPU yet: the static BLAS is used this frame
 		}
+		d.triangles = uint32_t(m.indices.size() / 3);
+		bool build = true;
 		if (!p_rt) {
 			d.sources = src;
-		} else if (changed) { // (re)create over the current buffers (they swap when motion vectors are on)
-			if (d.blas.is_valid()) {
-				rd->free_rid(d.blas);
+		} else {
+			int slot = d.slot_src[0] == src && d.slot_blas[0].is_valid() ? 0 : (d.slot_src[1] == src && d.slot_blas[1].is_valid() ? 1 : -1);
+			if (slot < 0) { // a buffer not seen yet: (re)create a BLAS over it, built this frame
+				slot = !d.slot_blas[0].is_valid() ? 0 : (!d.slot_blas[1].is_valid() ? 1 : int(d.next_evict));
+				d.next_evict = uint32_t(slot ^ 1);
+				if (d.slot_blas[slot].is_valid()) {
+					rd->free_rid(d.slot_blas[slot]);
+				}
+				TypedArray<RDAccelerationStructureGeometry> geoms;
+				for (size_t s = 0; s < m.surfaces.size(); s++) {
+					Ref<RDAccelerationStructureGeometry> g;
+					g.instantiate();
+					g->set_flags(RD::ACCELERATION_STRUCTURE_GEOMETRY_OPAQUE_BIT);
+					g->set_vertex_buffer(src[s]);
+					g->set_vertex_offset(0);
+					g->set_vertex_count(m.surfaces[s].vertex_count);
+					g->set_vertex_stride(12);
+					g->set_vertex_format(RD::DATA_FORMAT_R32G32B32_SFLOAT);
+					g->set_index_buffer(meshes[d.mesh].index_buffers[s]);
+					g->set_index_offset(0);
+					g->set_index_count(m.surfaces[s].index_count);
+					geoms.push_back(g);
+				}
+				d.slot_blas[slot] = rd->blas_create(geoms, RD::ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT);
+				d.slot_src[slot] = src;
+			} else {
+				build = built == 0 || budget_used + d.triangles <= deformed_triangle_budget;
 			}
-			TypedArray<RDAccelerationStructureGeometry> geoms;
-			for (size_t s = 0; s < m.surfaces.size(); s++) {
-				Ref<RDAccelerationStructureGeometry> g;
-				g.instantiate();
-				g->set_flags(RD::ACCELERATION_STRUCTURE_GEOMETRY_OPAQUE_BIT);
-				g->set_vertex_buffer(src[s]);
-				g->set_vertex_offset(0);
-				g->set_vertex_count(m.surfaces[s].vertex_count);
-				g->set_vertex_stride(12);
-				g->set_vertex_format(RD::DATA_FORMAT_R32G32B32_SFLOAT);
-				g->set_index_buffer(meshes[d.mesh].index_buffers[s]);
-				g->set_index_offset(0);
-				g->set_index_count(m.surfaces[s].index_count);
-				geoms.push_back(g);
-			}
-			d.blas = rd->blas_create(geoms, RD::ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT);
+			d.blas = d.slot_blas[slot];
 			d.sources = src;
+			if (build) {
+				builds.push_back(d.blas);
+				budget_used += d.triangles;
+				built++;
+				last_built = di;
+			}
+		}
+		if (!build) {
+			continue;
 		}
 		for (size_t s = 0; s < m.surfaces.size(); s++) {
 			const GIMeshCPU::Surface &surf = m.surfaces[s];
@@ -403,11 +434,11 @@ void GIWorldTracer::_update_deformed(const GISceneSnapshot &p_snap, bool p_rt) {
 		}
 	}
 	rd->compute_list_end();
-	for (DeformedGPU &d : deformed) {
-		if (p_rt && d.blas.is_valid()) {
-			rd->blas_build(d.blas); // deformed every frame: full rebuild (no refit API)
-		}
+	for (const RID &b : builds) {
+		rd->blas_build(b); // full rebuild (no refit API)
 	}
+	deformed_cursor = uint32_t(last_built + 1);
+	stats.deformed_triangles_built = budget_used;
 }
 
 bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap, bool p_deformed, Tier p_tier) {
@@ -484,8 +515,13 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 	}
 	for (const GIInstance &gi : p_snap.instances) {
 		const GIMeshCPU &m = *p_snap.meshes[gi.mesh];
-		Ref<RDAccelerationStructureInstance> ri;
-		ri.instantiate();
+		// Instance objects are pooled across frames (tens of thousands of allocations per frame otherwise).
+		if (insts.size() >= int64_t(inst_pool.size())) {
+			Ref<RDAccelerationStructureInstance> fresh;
+			fresh.instantiate();
+			inst_pool.push_back(fresh);
+		}
+		const Ref<RDAccelerationStructureInstance> &ri = inst_pool[insts.size()];
 		uint32_t vertex_base = vertex_bases[gi.mesh];
 		ri->set_blas(meshes[gi.mesh].blas);
 		const DeformedGPU *def = nullptr;
@@ -504,7 +540,7 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 		ri->set_hit_sbt_range(meshes[gi.mesh].sbt_range);
 		bool alpha_tested = false;
 		for (size_t s = 0; s < m.surfaces.size(); s++) {
-			const GIMaterial &mat = gi.materials[s];
+			const GIMaterial &mat = (*gi.materials)[s];
 			auto slot_of = [&](const RID &p_tex) {
 				if (!p_tex.is_valid()) {
 					return 0xFFFFFFFFu;

@@ -1,6 +1,10 @@
 #pragma once
 
 #include <godot_cpp/classes/node.hpp>
+#include <godot_cpp/classes/geometry_instance3d.hpp>
+#include <godot_cpp/classes/mesh.hpp>
+#include <godot_cpp/variant/aabb.hpp>
+#include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/classes/material.hpp>
 #include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/classes/texture2d.hpp>
@@ -54,7 +58,7 @@ struct GIMaterial {
 struct GIInstance {
 	uint32_t mesh; // index into GISceneSnapshot::meshes
 	godot::Transform3D xform;
-	std::vector<GIMaterial> materials; // per surface
+	std::shared_ptr<const std::vector<GIMaterial>> materials; // per surface (shared by MultiMesh instances)
 	bool deformed = false; // skinned / blend shapes: geometry comes from Godot's per-instance buffer
 	godot::RID rs_instance; // RenderingServer instance (for instance_surface_get_vertex_buffer_rd_rid)
 	godot::AABB aabb; // world bounds (deformed: rest pose bounds, grown)
@@ -116,9 +120,31 @@ protected:
 	std::unordered_map<uint64_t, TextureStats> texture_stats; // per texture RID, computed once
 	TextureStats _texture_stats(const godot::Ref<godot::Texture2D> &p_tex);
 	GIMaterial _material_of(const godot::Ref<godot::Material> &p_mat);
+	// Per update: materials by RID (each distinct material is evaluated once per frame).
+	std::unordered_map<uint64_t, GIMaterial> frame_materials;
+	const GIMaterial &_material_cached(const godot::Ref<godot::Material> &p_mat);
+	std::shared_ptr<const std::vector<GIMaterial>> _materials_of(const godot::Ref<godot::Mesh> &p_mesh, const GIMeshCPU &p_cpu,
+			const godot::Ref<godot::Material> &p_override, const godot::GeometryInstance3D *p_geo);
+	// World tracer culling of small, distant instances (their GI contribution is negligible; on screen
+	// the screen probes still see them): skipped when bounds size / distance < trace_min_size.
+	float trace_min_size = 0.01f;
+	bool cull_valid = false;
+	godot::Vector3 cull_origin;
+	uint64_t culled = 0;
+	bool _culled(const godot::AABB &p_world, const GIMeshCPU &p_cpu, const std::vector<GIMaterial> &p_mats) const;
+	// MultiMesh transform buffers, read back from the RenderingServer only every MM_REFRESH_FRAMES
+	// (a readback can stall the CPU on the GPU) or when the instance count changes.
+	struct MMCache {
+		godot::PackedFloat32Array buffer;
+		int count = -1;
+		uint64_t frame = 0;
+	};
+	std::unordered_map<uint64_t, MMCache> mm_cache;
+	uint64_t update_frame = 0;
 	// One instance of p_mesh (materials: p_override, else the mesh's surface materials).
 	void _add_instance(GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index, const godot::Ref<godot::Mesh> &p_mesh,
-			const godot::Transform3D &p_xform, const godot::Ref<godot::Material> &p_override, uint64_t p_key, bool p_cast_shadow = true);
+			const godot::Transform3D &p_xform, const godot::Ref<godot::Material> &p_override, uint64_t p_key, bool p_cast_shadow = true,
+			const std::shared_ptr<const std::vector<GIMaterial>> &p_materials = nullptr);
 
 	void _collect(godot::Node *p_node, GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index);
 	std::shared_ptr<const GIMeshCPU> _get_mesh(const godot::Ref<godot::Resource> &p_mesh);
@@ -129,6 +155,8 @@ public:
 	void _process(double p_delta) override;
 	void update_now();
 	void set_editor_preview(bool p_enable);
+	void set_trace_min_size(float p_size) { trace_min_size = p_size; }
+	float get_trace_min_size() const { return trace_min_size; }
 	godot::Dictionary get_collect_stats() const;
 	bool get_editor_preview() const;
 

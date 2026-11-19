@@ -345,9 +345,9 @@ void GoghotGI::_process(double p_delta) {
 			stats_next_usec = now + 2000000;
 			const Dictionary w = gi->get_stats();
 			const Dictionary c = get_collect_stats();
-			UtilityFunctions::print(vformat("GoghotGI: tier %s | collect %.2f ms (%d nodes, %d new meshes, cache %d) | tracer update %.2f ms, %d rebuilds (last %.1f ms) | %d instances, %d meshes, %d surfaces, %d tris | %d deformed, %d tris rebuilt per frame",
-					w["tier"], c["collect_ms"], c["nodes_visited"], c["new_meshes"], c["mesh_cache"], w["update_ms"], w["rebuilds"], w["rebuild_ms"],
-					w["instances"], w["meshes"], w["surfaces"], w["triangles"], w["deformed"], w["deformed_triangles"]));
+			UtilityFunctions::print(vformat("GoghotGI: tier %s | collect %.2f ms (%d nodes, %d new meshes, cache %d, %d culled) | tracer update %.2f ms, %d rebuilds (last %.1f ms) | %d instances, %d meshes, %d surfaces, %d tris | %d deformed (%d tris), %d tris rebuilt this frame",
+					w["tier"], c["collect_ms"], c["nodes_visited"], c["new_meshes"], c["mesh_cache"], c["culled"], w["update_ms"], w["rebuilds"], w["rebuild_ms"],
+					w["instances"], w["meshes"], w["surfaces"], w["triangles"], w["deformed"], w["deformed_triangles"], w["deformed_triangles_built"]));
 		}
 	}
 }

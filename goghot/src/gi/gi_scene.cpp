@@ -37,6 +37,7 @@
 using namespace godot;
 
 static constexpr double Math_PI_CONST = 3.14159265358979323846;
+static constexpr uint64_t MM_REFRESH_FRAMES = 60;
 
 namespace goghot {
 
@@ -178,8 +179,45 @@ GIMaterial GoghotGIScene::_material_of(const Ref<Material> &p_mat) {
 	return out;
 }
 
+const GIMaterial &GoghotGIScene::_material_cached(const Ref<Material> &p_mat) {
+	const uint64_t id = p_mat.is_valid() ? p_mat->get_rid().get_id() : 0;
+	auto it = frame_materials.find(id);
+	if (it != frame_materials.end()) {
+		return it->second;
+	}
+	return frame_materials.emplace(id, _material_of(p_mat)).first->second;
+}
+
+std::shared_ptr<const std::vector<GIMaterial>> GoghotGIScene::_materials_of(const Ref<Mesh> &p_mesh, const GIMeshCPU &p_cpu, const Ref<Material> &p_override,
+		const GeometryInstance3D *p_geo) {
+	auto v = std::make_shared<std::vector<GIMaterial>>();
+	v->reserve(p_cpu.surfaces.size());
+	for (const GIMeshCPU::Surface &surf : p_cpu.surfaces) {
+		Ref<Material> m = p_override;
+		if (m.is_null()) {
+			const MeshInstance3D *mi = Object::cast_to<MeshInstance3D>(p_geo);
+			m = mi ? mi->get_active_material(surf.source_surface) : p_mesh->surface_get_material(surf.source_surface);
+		}
+		v->push_back(_material_cached(m));
+	}
+	return v;
+}
+
+bool GoghotGIScene::_culled(const AABB &p_world, const GIMeshCPU &p_cpu, const std::vector<GIMaterial> &p_mats) const {
+	if (!cull_valid || trace_min_size <= 0.0f) {
+		return false;
+	}
+	for (const GIMaterial &m : p_mats) {
+		if (m.emission.r + m.emission.g + m.emission.b > 0.0f || m.emission_texture.is_valid()) {
+			return false; // small emitters still light the scene
+		}
+	}
+	const float d = MAX(p_world.get_center().distance_to(cull_origin) - 0.5f * p_world.size.length(), 0.0f);
+	return p_world.get_longest_axis_size() < trace_min_size * d;
+}
+
 void GoghotGIScene::_add_instance(GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index, const Ref<Mesh> &p_mesh,
-		const Transform3D &p_xform, const Ref<Material> &p_override, uint64_t p_key, bool p_cast_shadow) {
+		const Transform3D &p_xform, const Ref<Material> &p_override, uint64_t p_key, bool p_cast_shadow, const std::shared_ptr<const std::vector<GIMaterial>> &p_materials) {
 	std::shared_ptr<const GIMeshCPU> m = _get_mesh(p_mesh);
 	if (!m || m->surfaces.empty()) {
 		return;
@@ -194,14 +232,16 @@ void GoghotGIScene::_add_instance(GISceneSnapshot &r_snap, std::unordered_map<ui
 		mesh_index = it->second;
 	}
 	GIInstance inst;
+	inst.aabb = p_xform.xform(p_mesh->get_aabb());
+	inst.materials = p_materials ? p_materials : _materials_of(p_mesh, *m, p_override, nullptr);
+	if (_culled(inst.aabb, *m, *inst.materials)) {
+		culled++;
+		return;
+	}
 	inst.mesh = mesh_index;
 	inst.xform = p_xform;
-	inst.aabb = p_xform.xform(p_mesh->get_aabb());
 	inst.key = p_key;
 	inst.cast_shadow = p_cast_shadow;
-	for (const GIMeshCPU::Surface &surf : m->surfaces) {
-		inst.materials.push_back(_material_of(p_override.is_valid() ? p_override : p_mesh->surface_get_material(surf.source_surface)));
-	}
 	r_snap.instances.push_back(std::move(inst));
 }
 
@@ -289,10 +329,12 @@ void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unorder
 					// Animated poses can leave the rest pose bounds: grow them (tier B dirty regions).
 					inst.aabb = inst.aabb.grow(0.25f + 0.5f * inst.aabb.get_longest_axis_size());
 				}
-				for (const GIMeshCPU::Surface &surf : m->surfaces) {
-					inst.materials.push_back(_material_of(mi->get_active_material(surf.source_surface)));
+				inst.materials = _materials_of(mesh, *m, Ref<Material>(), mi);
+				if (!inst.deformed && _culled(inst.aabb, *m, *inst.materials)) {
+					culled++;
+				} else {
+					r_snap.instances.push_back(std::move(inst));
 				}
-				r_snap.instances.push_back(std::move(inst));
 			}
 		}
 	} else if (MultiMeshInstance3D *mmi = Object::cast_to<MultiMeshInstance3D>(p_node)) {
@@ -301,14 +343,25 @@ void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unorder
 			// Every instance becomes a world tracer instance (transforms read back from the
 			// RenderingServer buffer: 12 floats per instance, then optional color / custom data).
 			const int count = mm->get_visible_instance_count() < 0 ? mm->get_instance_count() : mm->get_visible_instance_count();
-			const PackedFloat32Array buf = mm->get_buffer();
+			MMCache &mc = mm_cache[mm->get_rid().get_id()];
+			if (mc.count != count || update_frame - mc.frame >= MM_REFRESH_FRAMES || mc.buffer.is_empty()) {
+				mc.buffer = mm->get_buffer();
+				mc.count = count;
+				mc.frame = update_frame;
+			}
+			const PackedFloat32Array &buf = mc.buffer;
 			const int stride = 12 + (mm->is_using_colors() ? 4 : 0) + (mm->is_using_custom_data() ? 4 : 0);
 			const Transform3D base = mmi->get_global_transform();
 			const Ref<Material> over = mmi->get_material_override();
-			for (int i = 0; i < count && (i + 1) * stride <= buf.size(); i++) {
-				const float *f = buf.ptr() + i * stride;
-				const Transform3D t(Basis(f[0], f[1], f[2], f[4], f[5], f[6], f[8], f[9], f[10]), Vector3(f[3], f[7], f[11]));
-				_add_instance(r_snap, r_mesh_index, mm->get_mesh(), base * t, over, instance_key(mmi, uint64_t(i)), mmi->get_cast_shadows_setting() != GeometryInstance3D::SHADOW_CASTING_SETTING_OFF);
+			std::shared_ptr<const GIMeshCPU> mcpu = _get_mesh(mm->get_mesh());
+			if (mcpu && !mcpu->surfaces.empty()) {
+				const auto mats = _materials_of(mm->get_mesh(), *mcpu, over, nullptr);
+				const bool cast = mmi->get_cast_shadows_setting() != GeometryInstance3D::SHADOW_CASTING_SETTING_OFF;
+				for (int i = 0; i < count && (i + 1) * stride <= buf.size(); i++) {
+					const float *f = buf.ptr() + i * stride;
+					const Transform3D t(Basis(f[0], f[1], f[2], f[4], f[5], f[6], f[8], f[9], f[10]), Vector3(f[3], f[7], f[11]));
+					_add_instance(r_snap, r_mesh_index, mm->get_mesh(), base * t, over, instance_key(mmi, uint64_t(i)), cast, mats);
+				}
 			}
 		}
 	} else if (CSGShape3D *csg = Object::cast_to<CSGShape3D>(p_node)) {
@@ -394,6 +447,16 @@ void GoghotGIScene::update_now() {
 	const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
 	nodes_visited = 0;
 	new_meshes = 0;
+	culled = 0;
+	update_frame++;
+	frame_materials.clear();
+	cull_valid = false;
+	if (Viewport *vp = get_viewport()) {
+		if (Camera3D *cam = vp->get_camera_3d()) {
+			cull_origin = cam->get_global_position();
+			cull_valid = true;
+		}
+	}
 	_update_units();
 	auto snap = std::make_shared<GISceneSnapshot>();
 	std::unordered_map<uint64_t, uint32_t> mesh_index;
@@ -435,6 +498,7 @@ Dictionary GoghotGIScene::get_collect_stats() const {
 	d["nodes_visited"] = int64_t(nodes_visited);
 	d["new_meshes"] = int64_t(new_meshes);
 	d["mesh_cache"] = int64_t(mesh_cache.size());
+	d["culled"] = int64_t(culled);
 	return d;
 }
 
@@ -474,6 +538,9 @@ void GoghotGIScene::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_gi"), &GoghotGIScene::get_gi);
 	ClassDB::bind_method(D_METHOD("update_now"), &GoghotGIScene::update_now);
 	ClassDB::bind_method(D_METHOD("get_collect_stats"), &GoghotGIScene::get_collect_stats);
+	ClassDB::bind_method(D_METHOD("set_trace_min_size", "size"), &GoghotGIScene::set_trace_min_size);
+	ClassDB::bind_method(D_METHOD("get_trace_min_size"), &GoghotGIScene::get_trace_min_size);
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "trace_min_size", PROPERTY_HINT_RANGE, "0,0.1,0.001"), "set_trace_min_size", "get_trace_min_size");
 	ClassDB::bind_method(D_METHOD("set_editor_preview", "enable"), &GoghotGIScene::set_editor_preview);
 	ClassDB::bind_method(D_METHOD("get_editor_preview"), &GoghotGIScene::get_editor_preview);
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "editor_preview"), "set_editor_preview", "get_editor_preview");

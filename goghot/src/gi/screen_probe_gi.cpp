@@ -699,6 +699,7 @@ Dictionary GoghotScreenProbeGI::get_stats() const {
 	d["triangles"] = int64_t(s.triangles);
 	d["deformed"] = s.deformed;
 	d["deformed_triangles"] = int64_t(s.deformed_triangles);
+	d["deformed_triangles_built"] = int64_t(s.deformed_triangles_built);
 	return d;
 }
 

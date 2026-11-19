@@ -3,6 +3,7 @@
 #include "gi_scene.h"
 
 #include <godot_cpp/classes/rendering_device.hpp>
+#include <godot_cpp/classes/rd_acceleration_structure_instance.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include <godot_cpp/variant/typed_array.hpp>
 
@@ -27,7 +28,8 @@ public:
 		uint64_t rebuilds = 0; // geometry rebuilds (BLAS / buffers) since start
 		uint64_t frames = 0;
 		uint32_t instances = 0, surfaces = 0, meshes = 0, deformed = 0;
-		uint64_t triangles = 0, deformed_triangles = 0; // per frame: all instances / deformed (BLAS rebuilt every frame)
+		uint64_t triangles = 0, deformed_triangles = 0; // per frame: all instances / deformed
+		uint64_t deformed_triangles_built = 0; // deformed BLAS triangles rebuilt this frame (budget)
 	};
 	Stats stats;
 	enum Tier {
@@ -104,9 +106,18 @@ private:
 		uint32_t mesh = 0;
 		godot::RID rs_instance;
 		uint32_t region_base = 0;
-		std::vector<godot::RID> sources;
-		godot::RID blas;
+		std::vector<godot::RID> sources; // vertex buffers the active BLAS / normals were built from
+		godot::RID blas; // active (= slot_blas[k] whose sources match)
+		// Godot alternates two deformed buffers per instance when motion vectors are on: one BLAS per
+		// buffer, so a swap reuses a BLAS instead of recreating it.
+		godot::RID slot_blas[2];
+		std::vector<godot::RID> slot_src[2];
+		uint32_t next_evict = 0;
+		uint32_t triangles = 0;
 	};
+	uint32_t deformed_cursor = 0; // round robin start of the BLAS rebuild budget
+	std::vector<godot::Ref<godot::RDAccelerationStructureInstance>> inst_pool;
+	uint32_t deformed_triangle_budget = 250000; // deformed BLAS triangles rebuilt per frame (round robin)
 	std::vector<DeformedGPU> deformed;
 	std::unordered_set<uint64_t> alive_deformed; // deformed instances present in the next snapshot
 	std::unordered_map<uint64_t, size_t> deformed_by_instance;
