@@ -93,7 +93,7 @@ void GIWorldTracer::_free_voxel() {
 	if (rd == nullptr) {
 		return;
 	}
-	free_rids(rd, { &vox_occ, &vox_key[0], &vox_key[1], &vox_albedo[0], &vox_albedo[1], &vox_normal[0], &vox_normal[1], &vox_emission[0], &vox_emission[1],
+	free_rids(rd, { &vox_occ, &vox_key[0], &vox_key[1], &vox_albedo[0], &vox_albedo[1], &vox_normal[0], &vox_normal[1], &vox_emission[0], &vox_emission[1], &vox_ecov,
 						  &vox_lit[0][0], &vox_lit[0][1], &vox_lit[1][0], &vox_lit[1][1],
 						  &vox_voxelize_shader, &vox_voxelize2_shader, &vox_light_shader, &vox_rays_shader, &vox_clear_shader, &vox_sampler });
 	vox_voxelize_pipeline = vox_voxelize2_pipeline = vox_light_pipeline = vox_rays_pipeline = vox_clear_pipeline = RID();
@@ -106,7 +106,7 @@ void GIWorldTracer::_ensure_voxel_textures(int p_res) {
 	if (p_res == vox_res && vox_occ.is_valid()) {
 		return;
 	}
-	free_rids(rd, { &vox_occ, &vox_key[0], &vox_key[1], &vox_albedo[0], &vox_albedo[1], &vox_normal[0], &vox_normal[1], &vox_emission[0], &vox_emission[1],
+	free_rids(rd, { &vox_occ, &vox_key[0], &vox_key[1], &vox_albedo[0], &vox_albedo[1], &vox_normal[0], &vox_normal[1], &vox_emission[0], &vox_emission[1], &vox_ecov,
 						  &vox_lit[0][0], &vox_lit[0][1], &vox_lit[1][0], &vox_lit[1][1] });
 	vox_res = p_res;
 	vox_valid = false; // new (cleared) textures: rebuild everything
@@ -130,6 +130,7 @@ void GIWorldTracer::_ensure_voxel_textures(int p_res) {
 		return t;
 	};
 	vox_occ = make(RD::DATA_FORMAT_R32_UINT, true);
+	vox_ecov = make(RD::DATA_FORMAT_R32_UINT, true);
 	for (int f = 0; f < 2; f++) {
 		vox_key[f] = make(RD::DATA_FORMAT_R32_UINT, true);
 		vox_albedo[f] = make(RD::DATA_FORMAT_R8G8B8A8_UNORM, false);
@@ -303,6 +304,7 @@ void GIWorldTracer::voxel_update(const RID &p_frame_ubo) {
 		us.push_back(vuni(RD::UNIFORM_TYPE_IMAGE, 13, vox_lit[0][1]));
 		us.push_back(vuni(RD::UNIFORM_TYPE_IMAGE, 14, vox_lit[1][0]));
 		us.push_back(vuni(RD::UNIFORM_TYPE_IMAGE, 15, vox_lit[1][1]));
+		us.push_back(vuni(RD::UNIFORM_TYPE_IMAGE, 16, vox_ecov));
 		int64_t cl = rd->compute_list_begin();
 		rd->compute_list_bind_compute_pipeline(cl, vox_clear_pipeline);
 		rd->compute_list_bind_uniform_set(cl, UniformSetCacheRD::get_cache(vox_clear_shader, 0, us), 0);
@@ -345,6 +347,7 @@ void GIWorldTracer::voxel_update(const RID &p_frame_ubo) {
 				us.push_back(vuni(RD::UNIFORM_TYPE_IMAGE, 9, vox_normal[1]));
 				us.push_back(vuni(RD::UNIFORM_TYPE_IMAGE, 10, vox_emission[0]));
 				us.push_back(vuni(RD::UNIFORM_TYPE_IMAGE, 11, vox_emission[1]));
+				us.push_back(vuni(RD::UNIFORM_TYPE_IMAGE, 16, vox_ecov));
 				rd->compute_list_bind_uniform_set(cl, UniformSetCacheRD::get_cache(shader, 0, us), 0);
 				_voxel_dispatch_pc(cl, &d, draw_id, bx.lo, bx.hi);
 				rd->compute_list_dispatch(cl, d.tri_count, 1, 1); // one workgroup per triangle

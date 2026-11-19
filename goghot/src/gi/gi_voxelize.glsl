@@ -27,6 +27,11 @@ layout(rgba8, set = 0, binding = 8) uniform restrict writeonly image3D vox_norma
 layout(rgba8, set = 0, binding = 9) uniform restrict writeonly image3D vox_normal1;
 layout(rgba16f, set = 0, binding = 10) uniform restrict writeonly image3D vox_emission0;
 layout(rgba16f, set = 0, binding = 11) uniform restrict writeonly image3D vox_emission1;
+// Emitter coverage per face slot (16 bits each, 1.0 = 2048): sum over emissive triangles of the share
+// of the voxel they really cover. Conservative voxelization grows a surface by about one voxel, so a
+// small emitter (0.15 m cube, 0.125 m voxels) would cover 2-3 voxels per axis and emit several times
+// its power; the winner's emission is scaled by min(coverage, 1) to keep the emitted power.
+layout(r32ui, set = 0, binding = 16) uniform restrict uimage3D vox_ecov;
 
 layout(push_constant, std430) uniform PC {
 	vec4 xform_x; // rows of the instance transform (object -> world)
@@ -66,6 +71,7 @@ void main() {
 	imageStore(vox_normal1, t, vec4(0.0));
 	imageStore(vox_emission0, t, vec4(0.0));
 	imageStore(vox_emission1, t, vec4(0.0));
+	imageStore(vox_ecov, t, uvec4(0u));
 	if (pc.box_hi.w == 1) {
 		imageStore(lit0a, t, vec4(0.0));
 		imageStore(lit0b, t, vec4(0.0));
@@ -94,14 +100,16 @@ void face_write(int slot, ivec3 t, uint key, vec3 face_n) {
 		return;
 	}
 	vec4 nrm = vec4(face_n * 0.5 + 0.5, 1.0);
+	uint ec = imageLoad(vox_ecov, t).r;
+	vec3 emission = pc.emission.rgb * min(float(slot == 0 ? (ec & 0xFFFFu) : (ec >> 16u)) * (1.0 / 2048.0), 1.0);
 	if (slot == 0) {
 		imageStore(vox_albedo0, t, vec4(pc.albedo.rgb, 1.0));
 		imageStore(vox_normal0, t, nrm);
-		imageStore(vox_emission0, t, vec4(pc.emission.rgb, 1.0));
+		imageStore(vox_emission0, t, vec4(emission, 1.0));
 	} else {
 		imageStore(vox_albedo1, t, vec4(pc.albedo.rgb, 1.0));
 		imageStore(vox_normal1, t, nrm);
-		imageStore(vox_emission1, t, vec4(pc.emission.rgb, 1.0));
+		imageStore(vox_emission1, t, vec4(emission, 1.0));
 	}
 #endif
 }
@@ -127,6 +135,7 @@ void main() {
 	int axis = (an.x > an.y && an.x > an.z) ? 0 : (an.y > an.z ? 1 : 2);
 	bool positive = n[axis] >= 0.0;
 	bool double_sided = pc.emission.a > 0.5;
+	bool emissive = dot(pc.emission.rgb, vec3(1.0)) > 0.0;
 	uint id = ((pc.draw_id & 0xFFu) << 16u) | (tri & 0xFFFFu);
 	{
 		int cas = pc.box_lo.w;
@@ -165,6 +174,20 @@ void main() {
 			uint key = (rank << 24u) | id;
 #if VOXELIZE_PASS == 0
 			imageAtomicMax(vox_occ, t, uint(clamp(pc.albedo.a, 0.0, 1.0) * 255.0));
+			if (emissive) {
+				// Share of the voxel covered: per edge, a half plane over a voxel wide square (summing
+				// to 1 across a shared edge), capped by the triangle's own area.
+				float sg = inside ? 1.0 : -1.0;
+				float cov = clamp(0.5 + sg * dot(q - a, e0) / (l0 * size), 0.0, 1.0) * clamp(0.5 + sg * dot(q - b, e1) / (l1 * size), 0.0, 1.0) *
+						clamp(0.5 + sg * dot(q - c, e2) / (l2 * size), 0.0, 1.0);
+				uint cq = uint(min(cov, 0.5 * area2 / (size * size)) * 2048.0 + 0.5);
+				if (positive || double_sided) {
+					imageAtomicAdd(vox_ecov, t, cq);
+				}
+				if (!positive || double_sided) {
+					imageAtomicAdd(vox_ecov, t, cq << 16u);
+				}
+			}
 #endif
 			if (positive || double_sided) {
 				face_write(0, t, key, positive ? n : -n);

@@ -133,7 +133,7 @@ private:
 	int vox_boxes_last = 0; // boxes rebuilt last frame (stats)
 	godot::RID vox_clear_shader, vox_clear_pipeline;
 	// Voxel attributes (N x N x N*cascades). Two face slots per voxel (0 / 1), see gi_voxel_common.glsl.
-	godot::RID vox_occ, vox_key[2], vox_albedo[2], vox_normal[2], vox_emission[2], vox_lit[2][2]; // vox_lit[face][ping]
+	godot::RID vox_occ, vox_key[2], vox_albedo[2], vox_normal[2], vox_emission[2], vox_ecov, vox_lit[2][2]; // vox_lit[face][ping]
 	int vox_res = 0;
 	int vox_ping = 0;
 	godot::RID vox_voxelize_shader, vox_voxelize_pipeline, vox_voxelize2_shader, vox_voxelize2_pipeline, vox_light_shader, vox_light_pipeline, vox_rays_shader, vox_rays_pipeline;
