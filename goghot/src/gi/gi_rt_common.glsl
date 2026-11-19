@@ -12,15 +12,20 @@ struct Geo {
 	uint alpha_scissor; // float bits, < 0 = opaque
 	vec4 albedo; // rgb linear albedo (times the texture), w: 1 = double sided
 	vec4 emission; // linear radiance
+	uint emission_texture; // texture slot, 0xFFFFFFFF = none
+	uint emission_multiply; // 1: emission * texture, 0: emission + texture * energy
+	float emission_energy;
+	float pad_geo;
 };
 layout(set = 0, binding = 5, std430) restrict readonly buffer Geos { Geo geos[]; };
 layout(set = 0, binding = 6, std430) restrict readonly buffer Normals { vec4 normals[]; };
 layout(set = 0, binding = 7, std430) restrict readonly buffer Indices { uint indices[]; };
 
 struct Light {
-	vec4 vec_type; // xyz: direction light travels (directional) or position (omni); w: 0 dir, 1 omni
+	vec4 vec_type; // xyz: direction light travels (directional) or position (omni / spot); w: 0 dir, 1 omni, 2 spot
 	vec4 color_range; // rgb: linear color * energy; w: range
-	vec4 params; // x: attenuation exponent, y: casts shadow
+	vec4 params; // x: attenuation exponent, y: casts shadow, z: spot cone exponent (1 / spot_angle_attenuation)
+	vec4 spot; // xyz: spot direction, w: cos of the cone half angle
 };
 layout(set = 0, binding = 8, std430) restrict readonly buffer Lights { Light lights[]; };
 layout(set = 0, binding = 10, std430) restrict writeonly buffer FogRays { vec4 fog_rays[]; };

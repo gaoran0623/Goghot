@@ -14,6 +14,11 @@
 #include <godot_cpp/classes/geometry_instance3d.hpp>
 #include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/classes/mesh_instance3d.hpp>
+#include <godot_cpp/classes/multi_mesh.hpp>
+#include <godot_cpp/classes/multi_mesh_instance3d.hpp>
+#include <godot_cpp/classes/csg_shape3d.hpp>
+#include <godot_cpp/classes/grid_map.hpp>
+#include <godot_cpp/classes/spot_light3d.hpp>
 #include <godot_cpp/classes/omni_light3d.hpp>
 #include <godot_cpp/classes/scene_tree.hpp>
 #include <godot_cpp/classes/image.hpp>
@@ -79,6 +84,44 @@ std::shared_ptr<const GIMeshCPU> GoghotGIScene::_get_mesh(const Ref<Resource> &p
 	return m;
 }
 
+GoghotGIScene::TextureStats GoghotGIScene::_texture_stats(const Ref<Texture2D> &p_tex) {
+	const uint64_t id = p_tex->get_rid().get_id();
+	auto it = texture_stats.find(id);
+	if (it != texture_stats.end()) {
+		return it->second;
+	}
+	// Average color (linear, alpha weighted) and alpha-test coverage, from a downsampled CPU copy.
+	TextureStats st = { Color(1, 1, 1), 1.0f };
+	Ref<Image> img = p_tex->get_image();
+	if (img.is_valid() && !img->is_empty()) {
+		img = img->duplicate();
+		if (img->is_compressed()) {
+			img->decompress();
+		}
+		img->convert(Image::FORMAT_RGBA8);
+		img->resize(MIN(img->get_width(), 64), MIN(img->get_height(), 64), Image::INTERPOLATE_BILINEAR);
+		double r = 0, g = 0, b = 0, wsum = 0, cov = 0;
+		const int n = img->get_width() * img->get_height();
+		for (int y = 0; y < img->get_height(); y++) {
+			for (int x = 0; x < img->get_width(); x++) {
+				Color px = img->get_pixel(x, y);
+				Color l = Color(px.r, px.g, px.b).srgb_to_linear();
+				r += l.r * px.a;
+				g += l.g * px.a;
+				b += l.b * px.a;
+				wsum += px.a;
+				cov += px.a >= 0.5f ? 1.0 : 0.0;
+			}
+		}
+		if (wsum > 0) {
+			st.average = Color(r / wsum, g / wsum, b / wsum);
+		}
+		st.coverage_at_half = n > 0 ? float(cov / n) : 1.0f;
+	}
+	texture_stats.emplace(id, st);
+	return st;
+}
+
 GIMaterial GoghotGIScene::_material_of(const Ref<Material> &p_mat) {
 	GIMaterial out;
 	out.albedo = Color(0.5f, 0.5f, 0.5f);
@@ -93,40 +136,9 @@ GIMaterial GoghotGIScene::_material_of(const Ref<Material> &p_mat) {
 		Ref<Texture2D> tex = bm->get_texture(BaseMaterial3D::TEXTURE_ALBEDO);
 		if (tex.is_valid()) {
 			out.albedo_texture = tex->get_rid();
-			auto it = texture_stats.find(out.albedo_texture.get_id());
-			if (it == texture_stats.end()) {
-				// Average color (linear) and alpha-test coverage, from a downsampled CPU copy.
-				TextureStats st = { Color(1, 1, 1), 1.0f };
-				Ref<Image> img = tex->get_image();
-				if (img.is_valid() && !img->is_empty()) {
-					img = img->duplicate();
-					if (img->is_compressed()) {
-						img->decompress();
-					}
-					img->convert(Image::FORMAT_RGBA8);
-					img->resize(MIN(img->get_width(), 64), MIN(img->get_height(), 64), Image::INTERPOLATE_BILINEAR);
-					double r = 0, g = 0, b = 0, wsum = 0, cov = 0;
-					const int n = img->get_width() * img->get_height();
-					for (int y = 0; y < img->get_height(); y++) {
-						for (int x = 0; x < img->get_width(); x++) {
-							Color px = img->get_pixel(x, y);
-							Color l = Color(px.r, px.g, px.b).srgb_to_linear();
-							r += l.r * px.a;
-							g += l.g * px.a;
-							b += l.b * px.a;
-							wsum += px.a;
-							cov += px.a >= 0.5f ? 1.0 : 0.0;
-						}
-					}
-					if (wsum > 0) {
-						st.average = Color(r / wsum, g / wsum, b / wsum);
-					}
-					st.coverage_at_half = n > 0 ? float(cov / n) : 1.0f;
-				}
-				it = texture_stats.emplace(out.albedo_texture.get_id(), st).first;
-			}
-			out.texture_average = it->second.average;
-			out.coverage = it->second.coverage_at_half;
+			const TextureStats st = _texture_stats(tex);
+			out.texture_average = st.average;
+			out.coverage = st.coverage_at_half;
 		}
 		const BaseMaterial3D::Transparency tr = bm->get_transparency();
 		if (tr == BaseMaterial3D::TRANSPARENCY_ALPHA_SCISSOR) {
@@ -139,16 +151,62 @@ GIMaterial GoghotGIScene::_material_of(const Ref<Material> &p_mat) {
 			out.coverage = 1.0f; // opaque: the texture alpha does not cut holes
 		}
 		if (bm->get_feature(BaseMaterial3D::FEATURE_EMISSION)) {
-			out.emission = bm->get_emission().srgb_to_linear() * bm->get_emission_energy_multiplier();
+			// As Godot shades it: add: (color + texture) * energy, multiply: color * texture * energy.
+			out.emission_energy = bm->get_emission_energy_multiplier();
+			out.emission = bm->get_emission().srgb_to_linear() * out.emission_energy;
+			Ref<Texture2D> etex = bm->get_texture(BaseMaterial3D::TEXTURE_EMISSION);
+			if (etex.is_valid()) {
+				out.emission_texture = etex->get_rid();
+				out.emission_multiply = bm->get_emission_operator() == BaseMaterial3D::EMISSION_OP_MULTIPLY;
+				out.emission_texture_average = _texture_stats(etex).average;
+			}
 		}
 	}
 	return out;
 }
 
+void GoghotGIScene::_add_instance(GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index, const Ref<Mesh> &p_mesh,
+		const Transform3D &p_xform, const Ref<Material> &p_override, uint64_t p_key) {
+	std::shared_ptr<const GIMeshCPU> m = _get_mesh(p_mesh);
+	if (!m || m->surfaces.empty()) {
+		return;
+	}
+	auto it = r_mesh_index.find(m->id);
+	uint32_t mesh_index;
+	if (it == r_mesh_index.end()) {
+		mesh_index = uint32_t(r_snap.meshes.size());
+		r_mesh_index[m->id] = mesh_index;
+		r_snap.meshes.push_back(m);
+	} else {
+		mesh_index = it->second;
+	}
+	GIInstance inst;
+	inst.mesh = mesh_index;
+	inst.xform = p_xform;
+	inst.aabb = p_xform.xform(p_mesh->get_aabb());
+	inst.key = p_key;
+	for (const GIMeshCPU::Surface &surf : m->surfaces) {
+		inst.materials.push_back(_material_of(p_override.is_valid() ? p_override : p_mesh->surface_get_material(surf.source_surface)));
+	}
+	r_snap.instances.push_back(std::move(inst));
+}
+
+static uint64_t instance_key(const Object *p_node, uint64_t p_index) {
+	uint64_t h = (p_node->get_instance_id() ^ (p_index * 0x9E3779B97F4A7C15ull)) * 0xBF58476D1CE4E5B9ull;
+	return h ^ (h >> 31);
+}
+
+// Light colors as Godot shades them (non-physical light units: color * energy).
+static Color light_color(const Light3D *p_light) {
+	return p_light->get_color().srgb_to_linear() * p_light->get_param(Light3D::PARAM_ENERGY);
+}
+
 void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index) {
+	GeometryInstance3D *geo = Object::cast_to<GeometryInstance3D>(p_node);
+	const bool geo_on = geo != nullptr && geo->is_visible_in_tree() && geo->get_gi_mode() != GeometryInstance3D::GI_MODE_DISABLED;
 	if (MeshInstance3D *mi = Object::cast_to<MeshInstance3D>(p_node)) {
 		Ref<Mesh> mesh = mi->get_mesh();
-		if (mi->is_visible_in_tree() && mesh.is_valid() && mi->get_gi_mode() != GeometryInstance3D::GI_MODE_DISABLED) {
+		if (geo_on && mesh.is_valid()) {
 			std::shared_ptr<const GIMeshCPU> m = _get_mesh(mesh);
 			if (m && !m->surfaces.empty()) {
 				auto it = r_mesh_index.find(m->id);
@@ -166,6 +224,7 @@ void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unorder
 				Ref<ArrayMesh> am = mesh;
 				inst.deformed = (mi->get_skin().is_valid() && !mi->get_skeleton_path().is_empty()) || (am.is_valid() && am->get_blend_shape_count() > 0);
 				inst.rs_instance = mi->get_instance();
+				inst.key = instance_key(mi, 0);
 				inst.aabb = inst.xform.xform(mi->get_aabb());
 				if (inst.deformed) {
 					// Animated poses can leave the rest pose bounds: grow them (tier B dirty regions).
@@ -177,12 +236,43 @@ void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unorder
 				r_snap.instances.push_back(std::move(inst));
 			}
 		}
+	} else if (MultiMeshInstance3D *mmi = Object::cast_to<MultiMeshInstance3D>(p_node)) {
+		Ref<MultiMesh> mm = mmi->get_multimesh();
+		if (geo_on && mm.is_valid() && mm->get_mesh().is_valid() && mm->get_transform_format() == MultiMesh::TRANSFORM_3D) {
+			// Every instance becomes a world tracer instance (transforms read back from the
+			// RenderingServer buffer: 12 floats per instance, then optional color / custom data).
+			const int count = mm->get_visible_instance_count() < 0 ? mm->get_instance_count() : mm->get_visible_instance_count();
+			const PackedFloat32Array buf = mm->get_buffer();
+			const int stride = 12 + (mm->is_using_colors() ? 4 : 0) + (mm->is_using_custom_data() ? 4 : 0);
+			const Transform3D base = mmi->get_global_transform();
+			const Ref<Material> over = mmi->get_material_override();
+			for (int i = 0; i < count && (i + 1) * stride <= buf.size(); i++) {
+				const float *f = buf.ptr() + i * stride;
+				const Transform3D t(Basis(f[0], f[1], f[2], f[4], f[5], f[6], f[8], f[9], f[10]), Vector3(f[3], f[7], f[11]));
+				_add_instance(r_snap, r_mesh_index, mm->get_mesh(), base * t, over, instance_key(mmi, uint64_t(i)));
+			}
+		}
+	} else if (CSGShape3D *csg = Object::cast_to<CSGShape3D>(p_node)) {
+		if (geo_on && csg->is_root_shape()) {
+			const Array arr = csg->get_meshes(); // [local transform, baked mesh]
+			if (arr.size() >= 2) {
+				_add_instance(r_snap, r_mesh_index, arr[1], csg->get_global_transform() * Transform3D(arr[0]), csg->get_material_override(), instance_key(csg, 0));
+			}
+		}
+	} else if (GridMap *gm = Object::cast_to<GridMap>(p_node)) {
+		if (gm->is_visible_in_tree()) {
+			const Array arr = gm->get_meshes(); // [local transform, mesh] per non-empty cell
+			const Transform3D base = gm->get_global_transform();
+			for (int i = 0; i + 1 < arr.size(); i += 2) {
+				_add_instance(r_snap, r_mesh_index, arr[i + 1], base * Transform3D(arr[i]), Ref<Material>(), instance_key(gm, uint64_t(i / 2)));
+			}
+		}
 	} else if (DirectionalLight3D *dl = Object::cast_to<DirectionalLight3D>(p_node)) {
 		if (dl->is_visible_in_tree()) {
 			GILight l;
 			l.type = GILight::DIRECTIONAL;
 			l.vec = -dl->get_global_transform().basis.get_column(2).normalized();
-			l.color = dl->get_color().srgb_to_linear() * dl->get_param(Light3D::PARAM_ENERGY);
+			l.color = light_color(dl);
 			l.shadow = dl->has_shadow();
 			r_snap.lights.push_back(l);
 		}
@@ -191,10 +281,26 @@ void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unorder
 			GILight l;
 			l.type = GILight::OMNI;
 			l.vec = ol->get_global_position();
-			l.color = ol->get_color().srgb_to_linear() * ol->get_param(Light3D::PARAM_ENERGY);
+			l.color = light_color(ol);
 			l.range = ol->get_param(Light3D::PARAM_RANGE);
 			l.attenuation = ol->get_param(Light3D::PARAM_ATTENUATION);
 			l.shadow = ol->has_shadow();
+			r_snap.lights.push_back(l);
+		}
+	} else if (SpotLight3D *sl = Object::cast_to<SpotLight3D>(p_node)) {
+		if (sl->is_visible_in_tree()) {
+			// Godot: omni distance attenuation * (1 - rim ^ (1 / spot_attenuation)),
+			// rim = (1 - cos) / (1 - cos(spot_angle)).
+			GILight l;
+			l.type = GILight::SPOT;
+			l.vec = sl->get_global_position();
+			l.spot_dir = -sl->get_global_transform().basis.get_column(2).normalized();
+			l.color = light_color(sl);
+			l.range = sl->get_param(Light3D::PARAM_RANGE);
+			l.attenuation = sl->get_param(Light3D::PARAM_ATTENUATION);
+			l.spot_cos = Math::cos(Math::deg_to_rad(sl->get_param(Light3D::PARAM_SPOT_ANGLE)));
+			l.spot_exp = 1.0f / MAX(sl->get_param(Light3D::PARAM_SPOT_ATTENUATION), 1e-4f);
+			l.shadow = sl->has_shadow();
 			r_snap.lights.push_back(l);
 		}
 	}

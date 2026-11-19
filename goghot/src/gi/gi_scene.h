@@ -2,6 +2,8 @@
 
 #include <godot_cpp/classes/node.hpp>
 #include <godot_cpp/classes/material.hpp>
+#include <godot_cpp/classes/mesh.hpp>
+#include <godot_cpp/classes/texture2d.hpp>
 #include <godot_cpp/classes/resource.hpp>
 #include <godot_cpp/variant/color.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
@@ -41,6 +43,11 @@ struct GIMaterial {
 	bool double_sided = false;
 	godot::Color texture_average = godot::Color(1, 1, 1); // linear average of the albedo texture (voxel tier)
 	float coverage = 1.0f; // fraction of the surface that is solid (alpha tested foliage < 1)
+	// Emission texture: emission = (emission + texture * energy) (add) or emission * texture (multiply).
+	godot::RID emission_texture;
+	bool emission_multiply = false;
+	float emission_energy = 1.0f;
+	godot::Color emission_texture_average = godot::Color(1, 1, 1); // linear (voxel tier)
 };
 
 struct GIInstance {
@@ -50,12 +57,16 @@ struct GIInstance {
 	bool deformed = false; // skinned / blend shapes: geometry comes from Godot's per-instance buffer
 	godot::RID rs_instance; // RenderingServer instance (for instance_surface_get_vertex_buffer_rd_rid)
 	godot::AABB aabb; // world bounds (deformed: rest pose bounds, grown)
+	uint64_t key = 0; // stable identity across frames (node, and cell / instance index)
 };
 
 struct GILight {
-	enum Type { DIRECTIONAL = 0, OMNI = 1 };
+	enum Type { DIRECTIONAL = 0, OMNI = 1, SPOT = 2 };
 	Type type;
-	godot::Vector3 vec; // DIRECTIONAL: direction light travels; OMNI: position
+	godot::Vector3 vec; // DIRECTIONAL: direction light travels; OMNI / SPOT: position
+	godot::Vector3 spot_dir; // SPOT: direction the cone points
+	float spot_cos = -1.0f; // SPOT: cos of the cone half angle
+	float spot_exp = 1.0f; // SPOT: Godot's 1 / spot_angle_attenuation
 	godot::Color color; // linear * energy (non-physical units, as Godot shades it)
 	float range = 0.0f;
 	float attenuation = 1.0f;
@@ -72,8 +83,9 @@ struct GISceneSnapshot {
 };
 
 // Collects meshes, materials and lights of the scene tree for the world tracer every frame and
-// hands them to its GoghotScreenProbeGI: MeshInstance3D (BaseMaterial3D albedo / emission / albedo
-// texture / alpha scissor / cull mode, skinned instances), DirectionalLight3D and OmniLight3D.
+// hands them to its GoghotScreenProbeGI: MeshInstance3D (incl. skinned), MultiMeshInstance3D, CSG
+// root shapes, GridMap cells (BaseMaterial3D albedo / emission colors and textures, alpha scissor,
+// cull mode; other materials are grey), DirectionalLight3D, OmniLight3D and SpotLight3D.
 // Geometry with gi_mode = Disabled is excluded (it then neither occludes nor bounces light).
 // In the editor it only runs with editor_preview and only collects the edited scene.
 class GoghotGIScene : public godot::Node {
@@ -88,8 +100,12 @@ protected:
 		godot::Color average;
 		float coverage_at_half;
 	};
-	std::unordered_map<uint64_t, TextureStats> texture_stats; // per albedo texture RID, computed once
+	std::unordered_map<uint64_t, TextureStats> texture_stats; // per texture RID, computed once
+	TextureStats _texture_stats(const godot::Ref<godot::Texture2D> &p_tex);
 	GIMaterial _material_of(const godot::Ref<godot::Material> &p_mat);
+	// One instance of p_mesh (materials: p_override, else the mesh's surface materials).
+	void _add_instance(GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index, const godot::Ref<godot::Mesh> &p_mesh,
+			const godot::Transform3D &p_xform, const godot::Ref<godot::Material> &p_override, uint64_t p_key);
 
 	void _collect(godot::Node *p_node, GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index);
 	std::shared_ptr<const GIMeshCPU> _get_mesh(const godot::Ref<godot::Resource> &p_mesh);

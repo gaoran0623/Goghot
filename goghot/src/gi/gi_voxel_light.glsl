@@ -17,6 +17,7 @@ struct Light {
 	vec4 vec_type;
 	vec4 color_range;
 	vec4 params;
+	vec4 spot;
 };
 layout(set = 0, binding = 12, std430) restrict readonly buffer Lights { Light lights[]; };
 
@@ -27,6 +28,17 @@ float omni_attenuation(float dist, float range, float decay) {
 	nd = max(1.0 - nd, 0.0);
 	nd *= nd;
 	return nd * pow(max(dist, 1e-4), -decay);
+}
+
+// Omni / spot distance attenuation (Godot's), times Godot's spot cone falloff for spots.
+float light_attenuation(Light l, vec3 L, float dist) {
+	float a = omni_attenuation(dist, l.color_range.w, l.params.x);
+	if (l.vec_type.w > 1.5) {
+		float scos = max(dot(-L, l.spot.xyz), l.spot.w);
+		float rim = max(1e-4, (1.0 - scos) / max(1.0 - l.spot.w, 1e-6));
+		a *= 1.0 - pow(rim, l.params.z);
+	}
+	return a;
 }
 
 vec3 face_lit(ivec3 t, vec3 p, float size, vec3 n, vec3 albedo, vec3 emission) {
@@ -45,7 +57,7 @@ vec3 face_lit(ivec3 t, vec3 p, float size, vec3 n, vec3 albedo, vec3 emission) {
 			vec3 d = l.vec_type.xyz - p;
 			dist = length(d);
 			L = d / max(dist, 1e-5);
-			atten = omni_attenuation(dist, l.color_range.w, l.params.x);
+			atten = light_attenuation(l, L, dist);
 		}
 		float ndl = dot(n, L);
 		if (ndl <= 0.0 || atten <= 0.0) {

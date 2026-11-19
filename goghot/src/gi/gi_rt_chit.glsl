@@ -21,5 +21,9 @@ void main() {
 	hit.t = gl_HitTEXT;
 	hit.albedo = g.albedo.rgb * sample_albedo(g, hit_uv(g, uint(gl_PrimitiveID), bary)).rgb;
 	hit.emission = g.emission.rgb;
+	if (g.emission_texture != 0xFFFFFFFFu) {
+		vec3 et = textureLod(sampler2D(textures[nonuniformEXT(g.emission_texture)], texture_sampler), hit_uv(g, uint(gl_PrimitiveID), bary), 0.0).rgb;
+		hit.emission = g.emission_multiply != 0u ? g.emission.rgb * et : g.emission.rgb + et * g.emission_energy;
+	}
 	hit.backface = back ? 1.0 : 0.0;
 }

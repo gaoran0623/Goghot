@@ -67,6 +67,54 @@ func _load_gltf(o: Dictionary) -> Node3D:
 	return scn
 
 
+# multimesh: boxes of one size, "instances": [[x, y, z, rot_y], ...]
+# csg: box "size" at "center" minus box "holes": [{"center", "size"}] (CSGBox3D subtraction)
+# gridmap: box "item_size" in cells "cells": [[i, j, k], ...] of "cell_size" (centered), node at "center"
+func _build_special(o: Dictionary, mat: Material) -> Node3D:
+	match o.type:
+		"multimesh":
+			var bm := BoxMesh.new()
+			bm.size = _v3(o.size)
+			var mm := MultiMesh.new()
+			mm.transform_format = MultiMesh.TRANSFORM_3D
+			mm.mesh = bm
+			mm.instance_count = o.instances.size()
+			for i in o.instances.size():
+				var t: Array = o.instances[i]
+				mm.set_instance_transform(i, Transform3D(Basis(Vector3.UP, deg_to_rad(t[3])), Vector3(t[0], t[1], t[2])))
+			var mmi := MultiMeshInstance3D.new()
+			mmi.multimesh = mm
+			mmi.material_override = mat
+			return mmi
+		"csg":
+			var c := CSGBox3D.new()
+			c.size = _v3(o.size)
+			c.position = _v3(o.center)
+			c.material = mat
+			for hole: Dictionary in o.get("holes", []):
+				var h := CSGBox3D.new()
+				h.size = _v3(hole.size)
+				h.position = _v3(hole.center) - _v3(o.center)
+				h.operation = CSGShape3D.OPERATION_SUBTRACTION
+				c.add_child(h)
+			return c
+		"gridmap":
+			var lib := MeshLibrary.new()
+			var bm2 := BoxMesh.new()
+			bm2.size = _v3(o.item_size)
+			bm2.material = mat
+			lib.create_item(0)
+			lib.set_item_mesh(0, bm2)
+			var gm := GridMap.new()
+			gm.mesh_library = lib
+			gm.cell_size = _v3(o.cell_size)
+			gm.position = _v3(o.get("center", [0, 0, 0]))
+			for c2: Array in o.cells:
+				gm.set_cell_item(Vector3i(int(c2[0]), int(c2[1]), int(c2[2])), 0)
+			return gm
+	return Node3D.new()
+
+
 func _local_to_root(n: Node3D, root: Node3D) -> Transform3D:
 	var t := n.transform
 	var p := n.get_parent()
@@ -100,11 +148,22 @@ func _build(root: Node3D) -> void:
 			mat.emission_enabled = true
 			mat.emission = _col(m.emission)
 			mat.emission_energy_multiplier = m.get("emission_strength", 1.0)
+		if m.has("emission_texture"): # emission = (emission + texture) * strength (Godot's add operator)
+			mat.emission_enabled = true
+			if not m.has("emission"):
+				mat.emission = Color(0, 0, 0)
+			mat.emission_energy_multiplier = m.get("emission_strength", 1.0)
+			var eimg := Image.load_from_file(ProjectSettings.globalize_path("res://assets/" + str(m.emission_texture)))
+			mat.emission_texture = ImageTexture.create_from_image(eimg)
+			mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
 		mats[name] = mat
 
 	for o: Dictionary in spec.objects:
 		if o.type == "gltf":
 			root.add_child(_load_gltf(o))
+			continue
+		if o.type == "multimesh" or o.type == "csg" or o.type == "gridmap":
+			root.add_child(_build_special(o, mats[o.material]))
 			continue
 		var mi := MeshInstance3D.new()
 		match o.type:
@@ -144,6 +203,15 @@ func _build(root: Node3D) -> void:
 				p.omni_attenuation = 2.0 # inverse-square, to match Cycles
 				p.omni_range = 100.0
 				node = p
+			"spot":
+				# Cone half angle "angle"; edge falloff 1 - rim^(1 / spot_attenuation), nearly hard with the
+				# default 0.05 (Cycles: spot blend "blend", default 0.05).
+				var sp := SpotLight3D.new()
+				sp.spot_attenuation = 2.0 # inverse-square distance falloff
+				sp.spot_range = 100.0
+				sp.spot_angle = l.angle
+				sp.spot_angle_attenuation = l.get("cone_attenuation", 0.05)
+				node = sp
 			_:
 				push_error("unknown light type " + str(l.type))
 				continue
@@ -206,10 +274,15 @@ func _build(root: Node3D) -> void:
 		var vgi := VoxelGI.new()
 		var box := AABB()
 		var first := true
-		for c: MeshInstance3D in root.find_children("*", "MeshInstance3D", true, false):
-			if c.mesh != null:
+		for c: VisualInstance3D in root.find_children("*", "VisualInstance3D", true, false):
+			if c is GeometryInstance3D:
 				var a: AABB = _local_to_root(c, root) * c.get_aabb()
 				box = a if first else box.merge(a)
+				first = false
+		for gmap: GridMap in root.find_children("*", "GridMap", true, false):
+			for cell: Vector3i in gmap.get_used_cells():
+				var a2 := AABB(gmap.position + gmap.map_to_local(cell) - gmap.cell_size * 0.5, gmap.cell_size)
+				box = a2 if first else box.merge(a2)
 				first = false
 		box = box.grow(0.5)
 		vgi.position = box.get_center()
@@ -327,6 +400,9 @@ func _apply_frame(f: int) -> void:
 			node.look_at_from_position(Vector3.ZERO, dir, Vector3.UP if absf(dir.y) < 0.99 else Vector3.FORWARD)
 		else:
 			node.position = _v3(_keyed(l, "position", f))
+			if node is SpotLight3D:
+				var sdir := _v3(_keyed(l, "direction", f)).normalized()
+				node.look_at_from_position(node.position, node.position + sdir, Vector3.UP if absf(sdir.y) < 0.99 else Vector3.FORWARD)
 	var sky_col := _col(_keyed(spec.sky, "color", f))
 	env.background_color = sky_col
 	env.ambient_light_color = sky_col

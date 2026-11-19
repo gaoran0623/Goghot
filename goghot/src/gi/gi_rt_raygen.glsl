@@ -16,6 +16,17 @@ float omni_attenuation(float dist, float range, float decay) {
 	return nd * pow(max(dist, 1e-4), -decay);
 }
 
+// Omni / spot distance attenuation (Godot's), times Godot's spot cone falloff for spots.
+float light_attenuation(Light l, vec3 L, float dist) {
+	float a = omni_attenuation(dist, l.color_range.w, l.params.x);
+	if (l.vec_type.w > 1.5) {
+		float scos = max(dot(-L, l.spot.xyz), l.spot.w);
+		float rim = max(1e-4, (1.0 - scos) / max(1.0 - l.spot.w, 1e-6));
+		a *= 1.0 - pow(rim, l.params.z);
+	}
+	return a;
+}
+
 float trace_shadow(vec3 o, vec3 d, float tmax) {
 	shadow_visible = 0.0;
 	traceRayEXT(tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT,
@@ -38,7 +49,7 @@ vec3 direct_light(vec3 p, vec3 n) {
 			vec3 d = l.vec_type.xyz - p;
 			dist = length(d);
 			L = d / max(dist, 1e-5);
-			atten = omni_attenuation(dist, l.color_range.w, l.params.x);
+			atten = light_attenuation(l, L, dist);
 		}
 		float ndl = dot(n, L);
 		if (ndl <= 0.0 || atten <= 0.0) {

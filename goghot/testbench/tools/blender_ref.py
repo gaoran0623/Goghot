@@ -131,6 +131,19 @@ for name, m in spec["materials"].items():
     if "emission" in m:
         bsdf.inputs["Emission Color"].default_value = (*m["emission"], 1.0)
         bsdf.inputs["Emission Strength"].default_value = m.get("emission_strength", 1.0)
+    if "emission_texture" in m:  # (emission + texture) * strength, like Godot's add operator
+        nt = mat.node_tree
+        et = nt.nodes.new("ShaderNodeTexImage")
+        et.image = bpy.data.images.load(os.path.join(os.path.dirname(scene_path), "..", "assets", m["emission_texture"]))
+        et.interpolation = "Linear"
+        add = nt.nodes.new("ShaderNodeMix")
+        add.data_type = "RGBA"
+        add.blend_type = "ADD"
+        add.inputs["Factor"].default_value = 1.0
+        add.inputs[6].default_value = (*m.get("emission", [0, 0, 0]), 1.0)
+        nt.links.new(et.outputs["Color"], add.inputs[7])
+        nt.links.new(add.outputs[2], bsdf.inputs["Emission Color"])
+        bsdf.inputs["Emission Strength"].default_value = m.get("emission_strength", 1.0)
     mats[name] = mat
 
 # Objects.
@@ -189,9 +202,43 @@ def load_gltf(o):
                         node.inputs[name].default_value = value
 
 
+def add_box(center, size, rot_y, mat):
+    bpy.ops.mesh.primitive_cube_add(size=1.0, location=v3(center))
+    ob = bpy.context.active_object
+    ob.scale = (size[0], size[2], size[1])
+    ob.rotation_euler = (0.0, 0.0, math.radians(rot_y))
+    ob.data.materials.append(mat)
+    return ob
+
+
+def build_special(o):
+    # Same geometry as capture.gd _build_special.
+    mat = mats[o["material"]]
+    if o["type"] == "multimesh":
+        for t in o["instances"]:
+            add_box(t[:3], o["size"], t[3], mat)
+    elif o["type"] == "csg":
+        ob = add_box(o["center"], o["size"], 0.0, mat)
+        for h in o.get("holes", []):
+            hole = add_box(h["center"], h["size"], 0.0, mat)
+            hole.hide_render = True
+            mod = ob.modifiers.new("hole", "BOOLEAN")
+            mod.operation = "DIFFERENCE"
+            mod.solver = "EXACT"
+            mod.object = hole
+    elif o["type"] == "gridmap":
+        c0 = o.get("center", [0, 0, 0])
+        cs = o["cell_size"]
+        for c in o["cells"]:
+            add_box([c0[k] + (c[k] + 0.5) * cs[k] for k in range(3)], o["item_size"], 0.0, mat)
+
+
 for o in spec["objects"]:
     if o["type"] == "gltf":
         load_gltf(o)
+        continue
+    if o["type"] in ("multimesh", "csg", "gridmap"):
+        build_special(o)
         continue
     if o["type"] == "box":
         bpy.ops.mesh.primitive_cube_add(size=1.0, location=v3(o["center"]))
@@ -238,6 +285,13 @@ for i, l in enumerate(spec["lights"]):
         ld.shadow_soft_size = 0.0
         if hasattr(ld, "use_soft_falloff"):
             ld.use_soft_falloff = False
+    elif l["type"] == "spot":
+        ld = bpy.data.lights.new(f"spot{i}", "SPOT")
+        ld.shadow_soft_size = 0.0
+        ld.spot_size = math.radians(2.0 * l["angle"])
+        ld.spot_blend = l.get("blend", 0.05)
+        if hasattr(ld, "use_soft_falloff"):
+            ld.use_soft_falloff = False
     else:
         raise ValueError("unknown light type " + l["type"])
     ob = bpy.data.objects.new(ld.name, ld)
@@ -257,8 +311,10 @@ def apply_frame(f):
             ob.data.energy = math.pi * e
             ob.rotation_euler = v3(keyed(l, "direction", f)).normalized().to_track_quat("-Z", "Y").to_euler()
         else:
-            ob.data.energy = 4.0 * math.pi * math.pi * e
+            ob.data.energy = 4.0 * math.pi * math.pi * e  # spot: same intensity as a point light, cone cut
             ob.location = v3(keyed(l, "position", f))
+            if l["type"] == "spot":
+                ob.rotation_euler = v3(keyed(l, "direction", f)).normalized().to_track_quat("-Z", "Y").to_euler()
     bg.inputs["Color"].default_value = (*keyed(spec["sky"], "color", f), 1.0)
 
 

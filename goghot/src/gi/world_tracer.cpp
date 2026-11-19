@@ -434,6 +434,8 @@ bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap, bool p_deformed,
 		uint32_t index_base, vertex_base, texture, alpha_scissor_bits;
 		float albedo[4];
 		float emission[4];
+		uint32_t emission_texture, emission_multiply;
+		float emission_energy, pad;
 	};
 	std::vector<GeoRow> rows;
 	texture_table.clear();
@@ -472,26 +474,35 @@ bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap, bool p_deformed,
 		bool alpha_tested = false;
 		for (size_t s = 0; s < m.surfaces.size(); s++) {
 			const GIMaterial &mat = gi.materials[s];
-			uint32_t ti = 0xFFFFFFFFu;
-			if (mat.albedo_texture.is_valid()) {
-				auto it = tex_index.find(mat.albedo_texture.get_id());
-				if (it != tex_index.end()) {
-					ti = it->second;
-				} else if (uint32_t(texture_table.size()) < MAX_TEXTURES) {
-					RID rdt = RenderingServer::get_singleton()->texture_get_rd_texture(mat.albedo_texture, true);
-					if (rdt.is_valid()) {
-						ti = uint32_t(texture_table.size());
-						texture_table.push_back(rdt);
-						tex_index[mat.albedo_texture.get_id()] = ti;
-					}
+			auto slot_of = [&](const RID &p_tex) {
+				if (!p_tex.is_valid()) {
+					return 0xFFFFFFFFu;
 				}
-			}
+				auto it = tex_index.find(p_tex.get_id());
+				if (it != tex_index.end()) {
+					return it->second;
+				}
+				if (uint32_t(texture_table.size()) >= MAX_TEXTURES) {
+					return 0xFFFFFFFFu;
+				}
+				RID rdt = RenderingServer::get_singleton()->texture_get_rd_texture(p_tex, true); // sRGB view: samples linear
+				if (!rdt.is_valid()) {
+					return 0xFFFFFFFFu;
+				}
+				const uint32_t slot = uint32_t(texture_table.size());
+				texture_table.push_back(rdt);
+				tex_index[p_tex.get_id()] = slot;
+				return slot;
+			};
+			const uint32_t ti = slot_of(mat.albedo_texture);
+			const uint32_t ei = slot_of(mat.emission_texture);
 			alpha_tested = alpha_tested || (mat.alpha_scissor >= 0.0f && ti != 0xFFFFFFFFu);
 			float scissor = ti != 0xFFFFFFFFu ? mat.alpha_scissor : -1.0f;
 			uint32_t scissor_bits;
 			memcpy(&scissor_bits, &scissor, 4);
 			rows.push_back({ index_bases[gi.mesh] + m.surfaces[s].index_base, vertex_base + m.surfaces[s].vertex_base, ti, scissor_bits,
-					{ mat.albedo.r, mat.albedo.g, mat.albedo.b, mat.double_sided ? 1.0f : 0.0f }, { mat.emission.r, mat.emission.g, mat.emission.b, 1.0f } });
+					{ mat.albedo.r, mat.albedo.g, mat.albedo.b, mat.double_sided ? 1.0f : 0.0f }, { mat.emission.r, mat.emission.g, mat.emission.b, 1.0f },
+					ei, mat.emission_multiply ? 1u : 0u, mat.emission_energy, 0.0f });
 			if (!rt) {
 				VoxDraw vd;
 				vd.xform = gi.xform;
@@ -505,12 +516,17 @@ bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap, bool p_deformed,
 				vd.albedo[1] = va.g;
 				vd.albedo[2] = va.b;
 				vd.albedo[3] = cov;
-				vd.emission[0] = mat.emission.r;
-				vd.emission[1] = mat.emission.g;
-				vd.emission[2] = mat.emission.b;
+				// Emission texture: its average (like the albedo texture).
+				Color ve = mat.emission;
+				if (ei != 0xFFFFFFFFu) {
+					ve = mat.emission_multiply ? mat.emission * mat.emission_texture_average : mat.emission + mat.emission_texture_average * mat.emission_energy;
+				}
+				vd.emission[0] = ve.r;
+				vd.emission[1] = ve.g;
+				vd.emission[2] = ve.b;
 				vd.emission[3] = mat.double_sided ? 1.0f : 0.0f;
 				vd.aabb = gi.aabb;
-				vd.key = (gi.rs_instance.get_id() << 8) ^ uint64_t(s);
+				vd.key = (gi.key << 8) ^ uint64_t(s);
 				vd.deformed = def != nullptr;
 				vox_draws.push_back(vd);
 			}
@@ -549,11 +565,12 @@ bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap, bool p_deformed,
 		float vec_type[4];
 		float color_range[4];
 		float params[4];
+		float spot[4];
 	};
 	std::vector<LightRow> lrows;
 	for (const GILight &l : p_snap.lights) {
 		lrows.push_back({ { l.vec.x, l.vec.y, l.vec.z, float(l.type) }, { l.color.r, l.color.g, l.color.b, l.range },
-				{ l.attenuation, l.shadow ? 1.0f : 0.0f, 0.0f, 0.0f } });
+				{ l.attenuation, l.shadow ? 1.0f : 0.0f, l.spot_exp, 0.0f }, { l.spot_dir.x, l.spot_dir.y, l.spot_dir.z, l.spot_cos } });
 	}
 	lights_used = uint32_t(lrows.size());
 	if (MAX(lights_used, 1u) > light_capacity) {
