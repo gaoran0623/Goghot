@@ -131,6 +131,7 @@ class RenderingDeviceDriverVulkan : public RenderingDeviceDriver {
 		PFN_vkCreateAccelerationStructureKHR CreateAccelerationStructureKHR = nullptr;
 		PFN_vkDestroyAccelerationStructureKHR DestroyAccelerationStructureKHR = nullptr;
 		PFN_vkGetAccelerationStructureBuildSizesKHR GetAccelerationStructureBuildSizesKHR = nullptr;
+		PFN_vkGetAccelerationStructureDeviceAddressKHR GetAccelerationStructureDeviceAddressKHR = nullptr;
 		PFN_vkCmdBuildAccelerationStructuresKHR CmdBuildAccelerationStructuresKHR = nullptr;
 		PFN_vkCreateRayTracingPipelinesKHR CreateRaytracingPipelinesKHR = nullptr;
 		PFN_vkGetRayTracingShaderGroupHandlesKHR GetRayTracingShaderGroupHandlesKHR = nullptr;
@@ -715,6 +716,9 @@ public:
 		uint32_t scratch_alignment;
 		// Size of the scratch buffer for building the structure
 		uint32_t scratch_size;
+		// vkGetAccelerationStructureDeviceAddressKHR of the structure: what TLAS instances must reference
+		// (the backing buffer's address is not guaranteed to be the same).
+		VkDeviceAddress device_address = 0;
 
 		// Required for building
 		TightLocalVector<VkAccelerationStructureGeometryKHR> geometries;
