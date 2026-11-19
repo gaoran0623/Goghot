@@ -701,6 +701,9 @@ Dictionary GoghotScreenProbeGI::get_stats() const {
 	d["deformed"] = s.deformed;
 	d["deformed_triangles"] = int64_t(s.deformed_triangles);
 	d["deformed_triangles_built"] = int64_t(s.deformed_triangles_built);
+	d["last_rebuild_added"] = s.last_rebuild_added;
+	d["last_rebuild_removed"] = s.last_rebuild_removed;
+	d["last_rebuild_deformed_changed"] = s.last_rebuild_deformed_changed;
 	return d;
 }
 

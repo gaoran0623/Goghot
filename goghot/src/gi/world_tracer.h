@@ -30,8 +30,11 @@ public:
 		uint32_t instances = 0, surfaces = 0, meshes = 0, deformed = 0;
 		uint64_t triangles = 0, deformed_triangles = 0; // per frame: all instances / deformed
 		uint64_t deformed_triangles_built = 0; // deformed BLAS triangles rebuilt this frame (budget)
+		uint32_t last_rebuild_added = 0, last_rebuild_removed = 0; // meshes vs the previous build
+		bool last_rebuild_deformed_changed = false;
 	};
 	Stats stats;
+	std::vector<uint64_t> built_mesh_ids, built_deformed_ids; // sorted, of the current build (diagnostics)
 	enum Tier {
 		TIER_A_RT,
 		TIER_B_VOXEL,

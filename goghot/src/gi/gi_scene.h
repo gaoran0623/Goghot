@@ -140,6 +140,15 @@ protected:
 		uint64_t frame = 0;
 	};
 	std::unordered_map<uint64_t, MMCache> mm_cache;
+	// MultiMeshes with many instances (grass, debris) are merged into one static mesh in the
+	// MultiMesh's space: one BLAS and one TLAS instance instead of thousands, re-merged only when the
+	// transforms (or the mesh) change.
+	struct MMAggregate {
+		std::shared_ptr<const GIMeshCPU> mesh;
+		uint64_t src_mesh = 0, hash = 0, version = 0;
+		godot::AABB local_aabb;
+	};
+	std::unordered_map<uint64_t, MMAggregate> mm_aggregates;
 	uint64_t update_frame = 0;
 	// One instance of p_mesh (materials: p_override, else the mesh's surface materials).
 	void _add_instance(GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index, const godot::Ref<godot::Mesh> &p_mesh,

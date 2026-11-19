@@ -2,6 +2,9 @@
 
 #include <godot_cpp/classes/time.hpp>
 
+#include <algorithm>
+#include <iterator>
+
 #include <godot_cpp/classes/rd_acceleration_structure_geometry.hpp>
 #include <godot_cpp/classes/rd_acceleration_structure_instance.hpp>
 #include <godot_cpp/classes/rd_hit_group.hpp>
@@ -488,6 +491,28 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 	if (p_snap.mesh_set_hash != mesh_set_hash || p_tier != built_tier) {
 		built_tier = p_tier;
 		const uint64_t r0 = Time::get_singleton()->get_ticks_usec();
+		{
+			std::vector<uint64_t> ids, dids;
+			for (const auto &m : p_snap.meshes) {
+				ids.push_back(m->id);
+			}
+			for (const GIInstance &gi : p_snap.instances) {
+				if (gi.deformed) {
+					dids.push_back(gi.rs_instance.get_id());
+				}
+			}
+			std::sort(ids.begin(), ids.end());
+			std::sort(dids.begin(), dids.end());
+			std::vector<uint64_t> diff;
+			std::set_difference(ids.begin(), ids.end(), built_mesh_ids.begin(), built_mesh_ids.end(), std::back_inserter(diff));
+			stats.last_rebuild_added = uint32_t(diff.size());
+			diff.clear();
+			std::set_difference(built_mesh_ids.begin(), built_mesh_ids.end(), ids.begin(), ids.end(), std::back_inserter(diff));
+			stats.last_rebuild_removed = uint32_t(diff.size());
+			stats.last_rebuild_deformed_changed = dids != built_deformed_ids;
+			built_mesh_ids = std::move(ids);
+			built_deformed_ids = std::move(dids);
+		}
 		_rebuild_geometry(p_snap);
 		stats.rebuild_ms = double(Time::get_singleton()->get_ticks_usec() - r0) / 1000.0;
 		stats.rebuilds++;

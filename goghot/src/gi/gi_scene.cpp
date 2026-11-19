@@ -1,5 +1,7 @@
 #include "gi_scene.h"
 
+#include <algorithm>
+
 #include "screen_probe_gi.h"
 
 #include <godot_cpp/classes/array_mesh.hpp>
@@ -38,6 +40,8 @@ using namespace godot;
 
 static constexpr double Math_PI_CONST = 3.14159265358979323846;
 static constexpr uint64_t MM_REFRESH_FRAMES = 60;
+static constexpr int MM_AGGREGATE_MIN = 32; // MultiMeshes with at least this many instances are merged
+static constexpr uint64_t MM_AGGREGATE_MAX_TRIS = 8000000; // ... unless the merged mesh would exceed this
 
 namespace goghot {
 
@@ -354,7 +358,74 @@ void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unorder
 			const Transform3D base = mmi->get_global_transform();
 			const Ref<Material> over = mmi->get_material_override();
 			std::shared_ptr<const GIMeshCPU> mcpu = _get_mesh(mm->get_mesh());
-			if (mcpu && !mcpu->surfaces.empty()) {
+			const int valid = MIN(count, stride > 0 ? int(buf.size() / stride) : 0);
+			const uint64_t src_tris = mcpu ? mcpu->indices.size() / 3 : 0;
+			if (mcpu && !mcpu->surfaces.empty() && valid >= MM_AGGREGATE_MIN && src_tris * uint64_t(valid) <= MM_AGGREGATE_MAX_TRIS) {
+				const auto mats = _materials_of(mm->get_mesh(), *mcpu, over, nullptr);
+				MMAggregate &ag = mm_aggregates[mm->get_rid().get_id()];
+				if (mc.frame == update_frame || !ag.mesh || ag.src_mesh != mcpu->id) { // buffer (re)read this frame: re-merge if it changed
+					uint64_t h = 1469598103934665603ull ^ uint64_t(valid);
+					const uint32_t *bits = reinterpret_cast<const uint32_t *>(buf.ptr());
+					for (int64_t k = 0; k < int64_t(valid) * stride; k++) {
+						h = (h ^ bits[k]) * 1099511628211ull;
+					}
+					if (!ag.mesh || ag.src_mesh != mcpu->id || ag.hash != h) {
+						auto out = std::make_shared<GIMeshCPU>();
+						out->id = 0x8000000000000000ull | ((mm->get_rid().get_id() * 1315423911ull + ++ag.version) & 0x7FFFFFFFFFFFFFFFull);
+						AABB box;
+						bool first = true;
+						for (const GIMeshCPU::Surface &src : mcpu->surfaces) {
+							GIMeshCPU::Surface surf = src;
+							surf.vertex_base = uint32_t(out->positions.size() / 3);
+							surf.vertex_count = src.vertex_count * uint32_t(valid);
+							surf.index_base = uint32_t(out->indices.size());
+							for (int i = 0; i < valid; i++) {
+								const float *f = buf.ptr() + i * stride;
+								const Transform3D t(Basis(f[0], f[1], f[2], f[4], f[5], f[6], f[8], f[9], f[10]), Vector3(f[3], f[7], f[11]));
+								const uint32_t vb = uint32_t(out->positions.size() / 3) - surf.vertex_base;
+								for (uint32_t v = 0; v < src.vertex_count; v++) {
+									const uint32_t sv = src.vertex_base + v;
+									const Vector3 p = t.xform(Vector3(mcpu->positions[sv * 3], mcpu->positions[sv * 3 + 1], mcpu->positions[sv * 3 + 2]));
+									const Vector3 n = t.basis.xform(Vector3(mcpu->normals[sv * 4], mcpu->normals[sv * 4 + 1], mcpu->normals[sv * 4 + 2])).normalized();
+									out->positions.insert(out->positions.end(), { p.x, p.y, p.z });
+									out->normals.insert(out->normals.end(), { n.x, n.y, n.z, 0.0f });
+									out->uvs.insert(out->uvs.end(), { mcpu->uvs[sv * 2], mcpu->uvs[sv * 2 + 1] });
+									if (first) {
+										box = AABB(p, Vector3());
+										first = false;
+									} else {
+										box.expand_to(p);
+									}
+								}
+								for (uint32_t k = 0; k < src.index_count; k++) {
+									out->indices.push_back(mcpu->indices[src.index_base + k] + vb);
+								}
+							}
+							surf.index_count = src.index_count * uint32_t(valid);
+							out->surfaces.push_back(surf);
+						}
+						ag.mesh = out;
+						ag.src_mesh = mcpu->id;
+						ag.hash = h;
+						ag.local_aabb = box;
+					}
+				}
+				GIInstance inst;
+				auto it = r_mesh_index.find(ag.mesh->id);
+				if (it == r_mesh_index.end()) {
+					inst.mesh = uint32_t(r_snap.meshes.size());
+					r_mesh_index[ag.mesh->id] = inst.mesh;
+					r_snap.meshes.push_back(ag.mesh);
+				} else {
+					inst.mesh = it->second;
+				}
+				inst.xform = base;
+				inst.aabb = base.xform(ag.local_aabb);
+				inst.key = instance_key(mmi, 0xFFFFFFFFull);
+				inst.cast_shadow = mmi->get_cast_shadows_setting() != GeometryInstance3D::SHADOW_CASTING_SETTING_OFF;
+				inst.materials = mats;
+				r_snap.instances.push_back(std::move(inst));
+			} else if (mcpu && !mcpu->surfaces.empty()) {
 				const auto mats = _materials_of(mm->get_mesh(), *mcpu, over, nullptr);
 				const bool cast = mmi->get_cast_shadows_setting() != GeometryInstance3D::SHADOW_CASTING_SETTING_OFF;
 				for (int i = 0; i < count && (i + 1) * stride <= buf.size(); i++) {
@@ -465,14 +536,38 @@ void GoghotGIScene::update_now() {
 		return;
 	}
 	_collect(root, *snap, mesh_index);
+	// Canonical mesh order (by id): the same set of meshes always gives the same order and hash, so the
+	// world tracer does not rebuild all geometry when only the scene tree order changed.
+	{
+		std::vector<uint32_t> order(snap->meshes.size());
+		for (uint32_t i = 0; i < order.size(); i++) {
+			order[i] = i;
+		}
+		std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return snap->meshes[a]->id < snap->meshes[b]->id; });
+		std::vector<uint32_t> remap(order.size());
+		std::vector<std::shared_ptr<const GIMeshCPU>> sorted(order.size());
+		for (uint32_t i = 0; i < order.size(); i++) {
+			sorted[i] = snap->meshes[order[i]];
+			remap[order[i]] = i;
+		}
+		snap->meshes = std::move(sorted);
+		for (GIInstance &inst : snap->instances) {
+			inst.mesh = remap[inst.mesh];
+		}
+	}
+	std::vector<uint64_t> deformed_ids;
+	for (const GIInstance &inst : snap->instances) {
+		if (inst.deformed) {
+			deformed_ids.push_back(inst.rs_instance.get_id());
+		}
+	}
+	std::sort(deformed_ids.begin(), deformed_ids.end());
 	uint64_t h = 1469598103934665603ull;
 	for (const auto &m : snap->meshes) {
 		h = (h ^ m->id) * 1099511628211ull;
 	}
-	for (const GIInstance &inst : snap->instances) {
-		if (inst.deformed) {
-			h = (h ^ (inst.rs_instance.get_id() * 31 + 7)) * 1099511628211ull;
-		}
+	for (const uint64_t id : deformed_ids) {
+		h = (h ^ (id * 31 + 7)) * 1099511628211ull;
 	}
 	snap->mesh_set_hash = h;
 	Ref<Environment> env;
