@@ -5,6 +5,8 @@
 #         --script res://capture.gd -- <scene.json> <out_dir>
 #         [gi_mode] [exposure]
 # gi_mode: baseline (flat ambient, default) | inject_identity | inject_red (engine patch 1 checks) | screen_probe (phase 2) | rt (phase 3) | node (phase 6: GoghotGI node)
+#          | godot_ssil (SSIL + SSAO) | godot_sdfgi (SDFGI) | godot_voxelgi (VoxelGI baked at load; dynamic objects not baked)
+#          native Godot GI, default settings, for comparison
 # exposure: fixed (default, exposure 1, comparable to Cycles) | auto (histogram auto exposure, GDScript proto) | auto_cpp (GDExtension)
 #
 # Scene JSON is shared with tools/blender_ref.py so Godot and Cycles build the same scene.
@@ -156,6 +158,29 @@ func _build(root: Node3D) -> void:
 		for k in gi_params: # node properties (quality, tracer, debug_view, auto_exposure)
 			node.set(k, gi_params[k])
 		root.add_child(node)
+	elif gi_mode == "godot_ssil":
+		env.ssil_enabled = true
+		env.ssao_enabled = true
+	elif gi_mode == "godot_sdfgi":
+		env.sdfgi_enabled = true
+	elif gi_mode == "godot_voxelgi" or gi_mode == "godot_voxelgi_interior":
+		var vgi := VoxelGI.new()
+		var box := AABB()
+		var first := true
+		for c in root.get_children():
+			if c is MeshInstance3D and c.mesh != null:
+				var a: AABB = c.transform * c.get_aabb()
+				box = a if first else box.merge(a)
+				first = false
+		box = box.grow(0.5)
+		vgi.position = box.get_center()
+		vgi.size = box.size
+		root.add_child(vgi)
+		if gi_mode == "godot_voxelgi_interior": # VoxelGIData.interior: no sky light through the probe
+			var data := VoxelGIData.new()
+			data.interior = true
+			vgi.data = data # bake() reuses existing data and keeps its settings
+		vgi.bake.call_deferred() # needs the scene in the tree
 	elif gi_mode != "baseline":
 		push_error("unknown gi mode " + gi_mode)
 	if exposure_mode == "auto" or exposure_mode == "auto_cpp":

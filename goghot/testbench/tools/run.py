@@ -161,7 +161,7 @@ def main():
     ap.add_argument("--exposure", default="fixed", choices=["fixed", "auto", "auto_cpp"],
                     help="auto = histogram auto exposure; FLIP/SSIM vs Cycles are skipped (not comparable), key metrics reported")
     ap.add_argument("--gi-params", default="", help='JSON property overrides for the GI effect, e.g. {"probe_spacing": 16}')
-    ap.add_argument("--gi", default="baseline", help="GI mode passed to capture.gd (baseline, inject_identity, inject_red, ...)")
+    ap.add_argument("--gi", default="baseline", help="GI mode passed to capture.gd (baseline, inject_identity, inject_red, screen_probe, rt, node, godot_ssil, godot_sdfgi, godot_voxelgi, godot_voxelgi_interior)")
     args = ap.parse_args()
     args.godot = str(Path(args.godot).resolve())
 
