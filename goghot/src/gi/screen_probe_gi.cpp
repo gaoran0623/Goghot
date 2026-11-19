@@ -21,6 +21,9 @@
 #include "gi/gi_hzb_down.glsl.gen.h"
 #include "gi/gi_probe_adaptive.glsl.gen.h"
 #include "gi/gi_probe_place.glsl.gen.h"
+#include "gi/gi_refl_resolve.glsl.gen.h"
+#include "gi/gi_refl_trace.glsl.gen.h"
+#include "gi/gi_screen_trace.glsl.gen.h"
 #include "gi/gi_resolve.glsl.gen.h"
 #include "gi/gi_temporal.glsl.gen.h"
 #include "gi/gi_trace.glsl.gen.h"
@@ -33,7 +36,7 @@ using RD = RenderingDevice;
 
 namespace {
 
-// std140 layout of the Frame UBO in gi_common.glsl (528 bytes).
+// std140 layout of the Frame UBO in gi_common.glsl (560 bytes).
 struct FrameUBO {
 	float proj[16];
 	float inv_proj[16];
@@ -75,8 +78,10 @@ struct FrameUBO {
 	int32_t fog_shift[4];
 	float fog_max_frames;
 	float pad4[3];
+	int32_t refl_grid[4];
+	float refl_params[4];
 };
-static_assert(sizeof(FrameUBO) == 528, "Frame UBO layout");
+static_assert(sizeof(FrameUBO) == 560, "Frame UBO layout");
 
 void store(const Projection &p_m, float *r_out) {
 	for (int c = 0; c < 4; c++) {
@@ -120,11 +125,12 @@ void GoghotScreenProbeGI::_create_pipelines() {
 		return;
 	}
 	const char *bodies[PASS_MAX] = { GI_HZB_COPY_GLSL, GI_HZB_DOWN_GLSL, GI_PROBE_PLACE_GLSL, GI_PROBE_ADAPTIVE_GLSL,
-		GI_TRACE_GLSL, GI_GATHER_GLSL, GI_FILTER_GLSL, GI_RESOLVE_GLSL, GI_TEMPORAL_GLSL, GI_FOG_ACCUMULATE_GLSL, GI_COPY_GLSL };
+		GI_TRACE_GLSL, GI_GATHER_GLSL, GI_FILTER_GLSL, GI_RESOLVE_GLSL, GI_TEMPORAL_GLSL, GI_FOG_ACCUMULATE_GLSL, GI_REFL_TRACE_GLSL, GI_REFL_RESOLVE_GLSL, GI_COPY_GLSL };
 	for (int i = 0; i < PASS_MAX; i++) {
 		Ref<RDShaderSource> src;
 		src.instantiate();
-		src->set_stage_source(RD::SHADER_STAGE_COMPUTE, String("#version 450\n") + String(GI_COMMON_GLSL) + String(bodies[i]));
+		const bool screen_trace = i == PASS_TRACE || i == PASS_REFL_TRACE;
+		src->set_stage_source(RD::SHADER_STAGE_COMPUTE, String("#version 450\n") + String(GI_COMMON_GLSL) + (screen_trace ? String(GI_SCREEN_TRACE_GLSL) : String()) + String(bodies[i]));
 		Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(src);
 		String err = spirv->get_stage_compile_error(RD::SHADER_STAGE_COMPUTE);
 		if (!err.is_empty()) {
@@ -170,7 +176,7 @@ void GoghotScreenProbeGI::_free_sized() {
 		rd->free_rid(m);
 	}
 	hzb_mips.clear();
-	RID *rids[] = { &hzb, &probes, &counter, &adaptive_map, &rays, &radiance, &filtered, &resolved, &history[0], &history[1], &aux[0], &aux[1], &moments[0], &moments[1], &prev_color };
+	RID *rids[] = { &hzb, &probes, &counter, &adaptive_map, &rays, &radiance, &filtered, &resolved, &history[0], &history[1], &aux[0], &aux[1], &moments[0], &moments[1], &prev_color, &refl_rays, &refl_history[0], &refl_history[1] };
 	for (RID *r : rids) {
 		if (r->is_valid()) {
 			rd->free_rid(*r);
@@ -264,6 +270,11 @@ void GoghotScreenProbeGI::_ensure_size(const Vector2i &p_size) {
 		moments[i] = _tex(RD::DATA_FORMAT_R32G32B32A32_SFLOAT, size, 1, storage_sample);
 	}
 	prev_color = _tex(RD::DATA_FORMAT_R16G16B16A16_SFLOAT, size, 1, storage_sample);
+	refl_size = (size + Vector2i(1, 1)) / 2;
+	refl_rays = rd->storage_buffer_create(refl_size.x * refl_size.y * 48);
+	for (int i = 0; i < 2; i++) {
+		refl_history[i] = _tex(RD::DATA_FORMAT_R16G16B16A16_SFLOAT, size, 1, storage_sample);
+	}
 	has_history = false;
 	prev_color_valid = false;
 }
@@ -402,6 +413,15 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 	f.fog_shift[1] = fog_shift.y;
 	f.fog_shift[2] = fog_shift.z;
 	f.fog_max_frames = float(MAX(fog_max_frames, 1));
+	const uint32_t fog_ray_total = fog_active ? uint32_t(fog_n * fog_n * fog_n * fog_rpv) : 0u;
+	f.refl_grid[0] = refl_size.x;
+	f.refl_grid[1] = refl_size.y;
+	f.refl_grid[2] = reflections ? 1 : 0;
+	f.refl_grid[3] = total_probes * 32 + int32_t(fog_ray_total);
+	f.refl_params[0] = CLAMP(reflection_max_roughness, 0.0f, 1.0f);
+	f.refl_params[1] = float(MAX(reflection_min_frames, 1));
+	f.refl_params[2] = float(MAX(reflection_max_frames, 1));
+	f.refl_params[3] = 32.0f;
 	PackedByteArray ubo;
 	ubo.resize(sizeof(f));
 	memcpy(ubo.ptrw(), &f, sizeof(f));
@@ -453,10 +473,19 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 		u.push_back(buf(5, rays));
 		_dispatch(cl, PASS_TRACE, u, total_probes, 1);
 	}
+	if (reflections) { // Reflection rays (half resolution), screen trace
+		TypedArray<RDUniform> u;
+		u.push_back(uni(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 1, nearest_sampler, hzb));
+		u.push_back(uni(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 2, linear_sampler, prev_color));
+		u.push_back(depth_u(3));
+		u.push_back(normal_u(4));
+		u.push_back(buf(5, refl_rays));
+		_dispatch(cl, PASS_REFL_TRACE, u, (refl_size.x + 7) / 8, (refl_size.y + 7) / 8);
+	}
 	rd->compute_list_end();
 	if (world_active) {
-		const uint32_t fog_ray_count = fog_active ? uint32_t(fog_n * fog_n * fog_n * fog_rpv) : 0u;
-		world.trace(frame_ubo, probes, rays, counter, fog_active ? fog_rays : rays, uint32_t(total_probes) * 32u + fog_ray_count);
+		const uint32_t refl_ray_count = reflections ? uint32_t(refl_size.x * refl_size.y) : 0u;
+		world.trace(frame_ubo, probes, rays, counter, fog_active ? fog_rays : rays, refl_rays, uint32_t(total_probes) * 32u + fog_ray_total + refl_ray_count);
 	}
 	const int64_t cl2 = rd->compute_list_begin();
 	{ // Gather rays -> probe radiance
@@ -498,6 +527,18 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 		u.push_back(uni(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 10, nearest_sampler, moments[ping ^ 1]));
 		u.push_back(img(11, moments[ping]));
 		_dispatch(cl2, PASS_TEMPORAL, u, groups8.x, groups8.y);
+	}
+	if (reflections) { // Reflection resolve (full resolution) -> rbgi/reflection
+		TypedArray<RDUniform> u;
+		u.push_back(depth_u(1));
+		u.push_back(normal_u(2));
+		u.push_back(buf(3, refl_rays));
+		u.push_back(uni(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 4, nearest_sampler, refl_history[ping ^ 1]));
+		u.push_back(uni(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 5, nearest_sampler, aux[ping ^ 1]));
+		u.push_back(img(6, refl_history[ping]));
+		u.push_back(img(7, ambient));
+		u.push_back(img(8, reflection));
+		_dispatch(cl2, PASS_REFL_RESOLVE, u, groups8.x, groups8.y);
 	}
 	if (fog_active) { // Fog GI volume accumulate (history -> volume), then keep a copy as next history.
 		TypedArray<RDUniform> u;
@@ -609,6 +650,10 @@ void GoghotScreenProbeGI::_bind_methods() {
 	GOGHOT_BIND(Variant::INT, fog_resolution, PROPERTY_HINT_RANGE, "8,128,2")
 	GOGHOT_BIND(Variant::INT, fog_rays_per_voxel, PROPERTY_HINT_RANGE, "1,64,1")
 	GOGHOT_BIND(Variant::INT, fog_max_frames, PROPERTY_HINT_RANGE, "1,256,1")
+	GOGHOT_BIND(Variant::BOOL, reflections, PROPERTY_HINT_NONE, "")
+	GOGHOT_BIND(Variant::FLOAT, reflection_max_roughness, PROPERTY_HINT_RANGE, "0,1,0.01")
+	GOGHOT_BIND(Variant::INT, reflection_min_frames, PROPERTY_HINT_RANGE, "1,64,1")
+	GOGHOT_BIND(Variant::INT, reflection_max_frames, PROPERTY_HINT_RANGE, "1,64,1")
 	ClassDB::bind_method(D_METHOD("is_world_tracer_supported"), &GoghotScreenProbeGI::is_world_tracer_supported);
 #undef GOGHOT_BIND
 }

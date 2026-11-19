@@ -24,6 +24,12 @@ struct Light {
 };
 layout(set = 0, binding = 8, std430) restrict readonly buffer Lights { Light lights[]; };
 layout(set = 0, binding = 10, std430) restrict writeonly buffer FogRays { vec4 fog_rays[]; };
+struct ReflRay {
+	vec4 origin; // xyz world origin, w: -1 no ray, 0 needs world trace, 1 resolved
+	vec4 dir; // xyz world direction, w: pixel index
+	vec4 radiance;
+};
+layout(set = 0, binding = 11, std430) restrict buffer ReflRays { ReflRay refl[]; };
 
 struct HitPayload {
 	vec3 normal; // world, shading normal

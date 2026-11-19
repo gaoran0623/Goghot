@@ -64,6 +64,24 @@ vec3 cosine_dir(vec3 n, vec2 u) {
 	return normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(0.0, 1.0 - u.x)));
 }
 
+// Radiance along a ray: miss -> sky, back face -> black, hit -> emission + albedo * (fresh direct +
+// cached indirect). No extra bounce ray (used by fog and reflection rays).
+vec3 shade_simple(vec3 origin, vec3 dir) {
+	if (!trace_hit(origin, dir)) {
+		return fr.sky.rgb;
+	}
+	if (hit.backface > 0.5) {
+		return vec3(0.0);
+	}
+	vec3 p = origin + dir * hit.t;
+	vec3 nrm = hit.normal;
+	vec3 albedo = hit.albedo;
+	vec3 emission = hit.emission;
+	vec4 c;
+	vec3 ind = cache_lookup(p, nrm, c) ? c.rgb : vec3(0.0);
+	return emission + albedo * (direct_light(p, nrm) + ind);
+}
+
 // Fog GI volume ray: uniform sphere direction from a jittered point in the voxel. Hits are shaded
 // with fresh direct light + cached indirect (no extra bounce ray); misses see the sky.
 void fog_ray(uint i) {
@@ -80,24 +98,24 @@ void fog_ray(uint i) {
 	float z = hash_f(seed + 3u) * 2.0 - 1.0;
 	float phi = 2.0 * PI * hash_f(seed + 4u);
 	vec3 dir = vec3(sqrt(max(0.0, 1.0 - z * z)) * vec2(cos(phi), sin(phi)), z);
-	vec3 radiance = fr.sky.rgb;
-	if (trace_hit(origin, dir)) {
-		radiance = vec3(0.0);
-		if (hit.backface < 0.5) {
-			vec3 p = origin + dir * hit.t;
-			vec3 nrm = hit.normal;
-			vec3 albedo = hit.albedo;
-			vec3 emission = hit.emission;
-			vec4 c;
-			vec3 ind = cache_lookup(p, nrm, c) ? c.rgb : vec3(0.0);
-			radiance = emission + albedo * (direct_light(p, nrm) + ind);
-		}
+	fog_rays[i] = vec4(shade_simple(origin, dir), 1.0);
+}
+
+// Reflection ray left unresolved by the screen trace (gi_refl_trace.glsl).
+void refl_ray(uint i) {
+	if (i >= uint(fr.refl_grid.x * fr.refl_grid.y) || refl[i].origin.w != 0.0) {
+		return;
 	}
-	fog_rays[i] = vec4(radiance, 1.0);
+	refl[i].radiance = vec4(shade_simple(refl[i].origin.xyz, refl[i].dir.xyz), 1.0);
+	refl[i].origin.w = 1.0;
 }
 
 void main() {
 	uint ray_index = gl_LaunchIDEXT.x;
+	if (fr.refl_grid.z != 0 && ray_index >= uint(fr.refl_grid.w)) {
+		refl_ray(ray_index - uint(fr.refl_grid.w));
+		return;
+	}
 	if (ray_index >= uint(fr.fog_grid.w)) {
 		if (fr.fog_grid.z != 0) {
 			fog_ray(ray_index - uint(fr.fog_grid.w));

@@ -1,0 +1,223 @@
+{
+	"description": "Glossy dark floor, mirror metal box, rough gold box, colored walls, sun + sky, emissive panel. Tests specular indirect: smooth reflections (screen + world traced), rough reflections, reflections of off-screen content.",
+	"sky": {
+		"color": [
+			0.35,
+			0.5,
+			0.8
+		]
+	},
+	"materials": {
+		"floor_gloss": {
+			"albedo": [
+				0.08,
+				0.08,
+				0.09
+			],
+			"roughness": 0.15,
+			"specular": 0.5
+		},
+		"mirror": {
+			"albedo": [
+				0.9,
+				0.9,
+				0.92
+			],
+			"roughness": 0.05,
+			"metallic": 1.0
+		},
+		"gold_rough": {
+			"albedo": [
+				1.0,
+				0.78,
+				0.34
+			],
+			"roughness": 0.4,
+			"metallic": 1.0
+		},
+		"red": {
+			"albedo": [
+				0.6,
+				0.08,
+				0.06
+			]
+		},
+		"green": {
+			"albedo": [
+				0.1,
+				0.45,
+				0.12
+			]
+		},
+		"white": {
+			"albedo": [
+				0.7,
+				0.7,
+				0.7
+			]
+		},
+		"lamp": {
+			"albedo": [
+				0,
+				0,
+				0
+			],
+			"emission": [
+				1.0,
+				0.85,
+				0.6
+			],
+			"emission_strength": 3.0
+		}
+	},
+	"objects": [
+		{
+			"type": "box",
+			"center": [
+				0,
+				-0.05,
+				0
+			],
+			"size": [
+				14,
+				0.1,
+				14
+			],
+			"material": "floor_gloss"
+		},
+		{
+			"type": "box",
+			"center": [
+				-3.5,
+				1.5,
+				-3
+			],
+			"size": [
+				0.3,
+				3,
+				6
+			],
+			"material": "red"
+		},
+		{
+			"type": "box",
+			"center": [
+				3.5,
+				1.5,
+				-3
+			],
+			"size": [
+				0.3,
+				3,
+				6
+			],
+			"material": "green"
+		},
+		{
+			"type": "box",
+			"center": [
+				0,
+				1.5,
+				-6.15
+			],
+			"size": [
+				7.3,
+				3,
+				0.3
+			],
+			"material": "white"
+		},
+		{
+			"type": "box",
+			"center": [
+				-1.2,
+				0.75,
+				-2.5
+			],
+			"size": [
+				1.2,
+				1.5,
+				1.2
+			],
+			"material": "mirror",
+			"rot_y": 25
+		},
+		{
+			"type": "box",
+			"center": [
+				1.4,
+				0.5,
+				-1.5
+			],
+			"size": [
+				1.0,
+				1.0,
+				1.0
+			],
+			"material": "gold_rough",
+			"rot_y": -15
+		},
+		{
+			"type": "box",
+			"center": [
+				0.3,
+				2.2,
+				-5.9
+			],
+			"size": [
+				1.2,
+				0.3,
+				0.1
+			],
+			"material": "lamp"
+		}
+	],
+	"lights": [
+		{
+			"type": "sun",
+			"direction": [
+				0.4,
+				-0.7,
+				-0.6
+			],
+			"color": [
+				1.0,
+				0.95,
+				0.85
+			],
+			"energy": 2.0
+		}
+	],
+	"camera": {
+		"fov_y": 60,
+		"hold_frames": 30,
+		"path": [
+			{
+				"position": [
+					0,
+					1.6,
+					4.5
+				],
+				"target": [
+					0,
+					0.8,
+					-3
+				],
+				"frames": 0
+			},
+			{
+				"position": [
+					2.8,
+					1.2,
+					2.5
+				],
+				"target": [
+					-1,
+					0.8,
+					-3
+				],
+				"frames": 60
+			}
+		]
+	}
+}

@@ -74,9 +74,11 @@ static GIMaterial material_of(const Ref<Material> &p_mat) {
 	out.emission = Color(0, 0, 0);
 	Ref<BaseMaterial3D> bm = p_mat;
 	if (bm.is_valid()) {
+		// Hit points are shaded as diffuse. Metals have no diffuse, but treating them as black makes them
+		// vanish from GI and reflections; their specular reflectance (= base color) is used as a diffuse
+		// stand-in instead, which is close for rough metals and too dull for mirrors.
 		Color a = bm->get_albedo().srgb_to_linear();
-		float metallic = bm->get_metallic();
-		out.albedo = Color(a.r, a.g, a.b) * (1.0f - metallic); // diffuse part only
+		out.albedo = Color(a.r, a.g, a.b);
 		if (bm->get_feature(BaseMaterial3D::FEATURE_EMISSION)) {
 			out.emission = bm->get_emission().srgb_to_linear() * bm->get_emission_energy_multiplier();
 		}

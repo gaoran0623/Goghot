@@ -45,6 +45,8 @@ layout(set = 0, binding = 0, std140) uniform Frame {
 	float pad4;
 	float pad5;
 	float pad6;
+	ivec4 refl_grid; // xy: half resolution size, z: enabled, w: launch index where reflection rays start
+	vec4 refl_params; // x: max traced roughness, y/z: history frames at roughness 0 / max, w: normal power
 }
 fr;
 
