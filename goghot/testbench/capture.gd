@@ -230,6 +230,15 @@ func _build(root: Node3D) -> void:
 				sp.spot_angle = l.angle
 				sp.spot_angle_attenuation = l.get("cone_attenuation", 0.05)
 				node = sp
+			"area":
+				# Rectangle "size" [w, h] (local X / Y), emitting along "direction" (-Z), "up" orients
+				# the width; energy normalized by the area (Godot default); inverse-square window.
+				var ar := AreaLight3D.new()
+				ar.area_size = Vector2(l.size[0], l.size[1])
+				ar.area_normalize_energy = true
+				ar.set_param(Light3D.PARAM_ATTENUATION, 2.0)
+				ar.set_param(Light3D.PARAM_RANGE, 100.0)
+				node = ar
 			_:
 				push_error("unknown light type " + str(l.type))
 				continue
@@ -239,6 +248,8 @@ func _build(root: Node3D) -> void:
 				node.light_intensity_lux = PI / PHYS_N
 			elif node is SpotLight3D:
 				node.light_intensity_lumens = PI * PI / PHYS_N
+			elif node is AreaLight3D:
+				node.light_intensity_lumens = 2.0 * PI * PI / PHYS_N
 			else:
 				node.light_intensity_lumens = 4.0 * PI * PI / PHYS_N
 		root.add_child(node)
@@ -456,9 +467,10 @@ func _apply_frame(f: int) -> void:
 			node.look_at_from_position(Vector3.ZERO, dir, Vector3.UP if absf(dir.y) < 0.99 else Vector3.FORWARD)
 		else:
 			node.position = _v3(_keyed(l, "position", f))
-			if node is SpotLight3D:
+			if node is SpotLight3D or node is AreaLight3D:
 				var sdir := _v3(_keyed(l, "direction", f)).normalized()
-				node.look_at_from_position(node.position, node.position + sdir, Vector3.UP if absf(sdir.y) < 0.99 else Vector3.FORWARD)
+				var up := _v3(l.get("up", [0, 1, 0])) if absf(sdir.y) < 0.99 or l.has("up") else Vector3.FORWARD
+				node.look_at_from_position(node.position, node.position + sdir, up)
 	var sky_col := _col(_keyed(spec.sky, "color", f)) # (panorama skies: unused by Godot, average for rt mode)
 	env.background_color = sky_col
 	env.ambient_light_color = sky_col

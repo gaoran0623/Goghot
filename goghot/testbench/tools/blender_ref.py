@@ -304,6 +304,13 @@ for i, l in enumerate(spec["lights"]):
         ld.shadow_soft_size = 0.0
         if hasattr(ld, "use_soft_falloff"):
             ld.use_soft_falloff = False
+    elif l["type"] == "area":
+        ld = bpy.data.lights.new(f"area{i}", "AREA")
+        ld.shape = "RECTANGLE"
+        ld.size = l["size"][0]
+        ld.size_y = l["size"][1]
+        if hasattr(ld, "spread"):
+            ld.spread = math.pi
     elif l["type"] == "spot":
         ld = bpy.data.lights.new(f"spot{i}", "SPOT")
         ld.shadow_soft_size = 0.0
@@ -337,6 +344,18 @@ def apply_frame(f):
         else:
             ob.data.energy = 4.0 * math.pi * math.pi * e  # spot: same intensity as a point light, cone cut
             ob.location = v3(keyed(l, "position", f))
+            if l["type"] == "area":
+                # Godot: radiance E / area (ours) = pi * that in Cycles (Lambert 1/pi), power = pi * A * L.
+                ob.data.energy = math.pi * math.pi * e
+                # Same basis as Godot's look_at: -Z = direction, Y ~ up, X = Y x Z.
+                d = Vector(keyed(l, "direction", f)).normalized()
+                upg = Vector(l.get("up", [0, 1, 0]) if abs(d.y) < 0.99 or "up" in l else [0, 0, -1])
+                zg = -d
+                xg = upg.cross(zg).normalized()
+                yg = zg.cross(xg)
+                bx, by, bz = v3(list(xg)), v3(list(yg)), v3(list(zg))
+                ob.matrix_world = Matrix(((bx.x, by.x, bz.x, 0), (bx.y, by.y, bz.y, 0), (bx.z, by.z, bz.z, 0), (0, 0, 0, 1)))
+                ob.location = v3(keyed(l, "position", f))
             if l["type"] == "spot":
                 ob.rotation_euler = v3(keyed(l, "direction", f)).normalized().to_track_quat("-Z", "Y").to_euler()
     if "panorama" not in spec["sky"]:

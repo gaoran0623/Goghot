@@ -16,6 +16,36 @@ float omni_attenuation(float dist, float range, float decay) {
 	return nd * pow(max(dist, 1e-4), -decay);
 }
 
+// Area light (type 3): one random point q on the rectangle (seed), its single sample estimate of
+// the rectangle's irradiance: radiance * cos_light * area / d^2 (times Godot's distance window at the
+// closest point). Returns false when p is behind the light. L / dist point to q (shadow ray target).
+bool area_light_sample(Light l, vec3 p, uint seed, out vec3 L, out float dist, out float atten) {
+	vec3 c = l.vec_type.xyz;
+	vec3 e = l.spot.xyz;
+	atten = 0.0;
+	L = vec3(0.0, 1.0, 0.0);
+	dist = 1.0;
+	if (dot(p - c, e) <= 0.0) {
+		return false;
+	}
+	float ha = length(l.area_a.xyz), hb = length(l.area_b.xyz);
+	vec3 ua = l.area_a.xyz / max(ha, 1e-6), ub = l.area_b.xyz / max(hb, 1e-6);
+	vec3 rel = p - c;
+	vec3 closest = c + ua * clamp(dot(rel, ua), -ha, ha) + ub * clamp(dot(rel, ub), -hb, hb);
+	float dc = max(distance(p, closest), 1e-4);
+	float window = omni_attenuation(dc, l.color_range.w, l.params.x) * dc * dc;
+	vec3 q = c + l.area_a.xyz * (hash_f(seed) * 2.0 - 1.0) + l.area_b.xyz * (hash_f(seed + 1u) * 2.0 - 1.0);
+	vec3 d = q - p;
+	dist = max(length(d), 1e-4);
+	L = d / dist;
+	float cos_l = dot(-L, e);
+	if (cos_l <= 0.0) {
+		return false;
+	}
+	atten = window * cos_l * (4.0 * ha * hb) / (dist * dist);
+	return true;
+}
+
 // Omni / spot distance attenuation (Godot's), times Godot's spot cone falloff for spots.
 float light_attenuation(Light l, vec3 L, float dist) {
 	float a = omni_attenuation(dist, l.color_range.w, l.params.x);
@@ -45,6 +75,11 @@ vec3 direct_light(vec3 p, vec3 n) {
 		if (l.vec_type.w < 0.5) {
 			L = -l.vec_type.xyz;
 			dist = 1e5;
+		} else if (l.vec_type.w > 2.5) {
+			uint seed = hash_u(floatBitsToUint(p.x) ^ hash_u(floatBitsToUint(p.y) ^ hash_u(floatBitsToUint(p.z)))) + uint(fr.frame) * 7919u + uint(i) * 104729u;
+			if (!area_light_sample(l, p, seed, L, dist, atten)) {
+				continue;
+			}
 		} else {
 			vec3 d = l.vec_type.xyz - p;
 			dist = length(d);

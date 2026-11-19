@@ -1,0 +1,275 @@
+{
+	"description": "Cornell box lit by AreaLight3D panels instead of a point light: a 0.8 x 0.8 m ceiling panel facing down and a 0.6 x 0.4 m warm panel on the back wall facing the room (one sided, soft shadows). Tests area lights in the world tracer (sampled rectangle + shadow rays).",
+	"sky": {
+		"color": [
+			0.0,
+			0.0,
+			0.0
+		]
+	},
+	"materials": {
+		"white": {
+			"albedo": [
+				0.73,
+				0.73,
+				0.73
+			]
+		},
+		"red": {
+			"albedo": [
+				0.65,
+				0.05,
+				0.05
+			]
+		},
+		"green": {
+			"albedo": [
+				0.12,
+				0.45,
+				0.15
+			]
+		},
+		"lamp": {
+			"albedo": [
+				0.0,
+				0.0,
+				0.0
+			],
+			"emission": [
+				1.0,
+				0.9,
+				0.75
+			],
+			"emission_strength": 8.0
+		}
+	},
+	"objects": [
+		{
+			"type": "box",
+			"center": [
+				0,
+				-0.05,
+				1.5
+			],
+			"size": [
+				2.2,
+				0.1,
+				5.2
+			],
+			"material": "white"
+		},
+		{
+			"type": "box",
+			"center": [
+				0,
+				2.05,
+				1.5
+			],
+			"size": [
+				2.2,
+				0.1,
+				5.2
+			],
+			"material": "white"
+		},
+		{
+			"type": "box",
+			"center": [
+				0,
+				1,
+				-1.05
+			],
+			"size": [
+				2.2,
+				2.2,
+				0.1
+			],
+			"material": "white"
+		},
+		{
+			"type": "box",
+			"center": [
+				0,
+				1,
+				4.05
+			],
+			"size": [
+				2.2,
+				2.2,
+				0.1
+			],
+			"material": "white"
+		},
+		{
+			"type": "box",
+			"center": [
+				-1.05,
+				1,
+				0
+			],
+			"size": [
+				0.1,
+				2.2,
+				2.0
+			],
+			"material": "red"
+		},
+		{
+			"type": "box",
+			"center": [
+				1.05,
+				1,
+				0
+			],
+			"size": [
+				0.1,
+				2.2,
+				2.0
+			],
+			"material": "green"
+		},
+		{
+			"type": "box",
+			"center": [
+				-1.05,
+				1,
+				2.5
+			],
+			"size": [
+				0.1,
+				2.2,
+				3.0
+			],
+			"material": "white"
+		},
+		{
+			"type": "box",
+			"center": [
+				1.05,
+				1,
+				2.5
+			],
+			"size": [
+				0.1,
+				2.2,
+				3.0
+			],
+			"material": "white"
+		},
+		{
+			"type": "box",
+			"center": [
+				0.35,
+				0.3,
+				0.35
+			],
+			"size": [
+				0.6,
+				0.6,
+				0.6
+			],
+			"rot_y": -17,
+			"material": "white"
+		},
+		{
+			"type": "box",
+			"center": [
+				-0.35,
+				0.6,
+				-0.3
+			],
+			"size": [
+				0.6,
+				1.2,
+				0.6
+			],
+			"rot_y": 17,
+			"material": "white"
+		}
+	],
+	"lights": [
+		{
+			"type": "area",
+			"position": [
+				0,
+				1.98,
+				0.0
+			],
+			"direction": [
+				0,
+				-1,
+				0
+			],
+			"up": [
+				0,
+				0,
+				-1
+			],
+			"size": [
+				0.8,
+				0.8
+			],
+			"color": [
+				1.0,
+				0.92,
+				0.8
+			],
+			"energy": 3.0
+		},
+		{
+			"type": "area",
+			"position": [
+				0.4,
+				1.2,
+				-0.98
+			],
+			"direction": [
+				0,
+				0,
+				1
+			],
+			"size": [
+				0.6,
+				0.4
+			],
+			"color": [
+				1.0,
+				0.6,
+				0.3
+			],
+			"energy": 2.0
+		}
+	],
+	"camera": {
+		"fov_y": 40,
+		"hold_frames": 30,
+		"path": [
+			{
+				"position": [
+					0,
+					1,
+					3.4
+				],
+				"target": [
+					0,
+					1,
+					0
+				],
+				"frames": 0
+			},
+			{
+				"position": [
+					0.6,
+					1.2,
+					2.6
+				],
+				"target": [
+					0,
+					0.8,
+					0
+				],
+				"frames": 60
+			}
+		]
+	}
+}

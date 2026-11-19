@@ -23,6 +23,7 @@
 #include <godot_cpp/classes/csg_shape3d.hpp>
 #include <godot_cpp/classes/grid_map.hpp>
 #include <godot_cpp/classes/spot_light3d.hpp>
+#include <godot_cpp/classes/area_light3d.hpp>
 #include <godot_cpp/classes/omni_light3d.hpp>
 #include <godot_cpp/classes/scene_tree.hpp>
 #include <godot_cpp/classes/image.hpp>
@@ -244,6 +245,8 @@ static Color light_color(const Light3D *p_light, GILight::Type p_type, bool p_ph
 			e /= 4.0f * float(Math_PI_CONST);
 		} else if (p_type == GILight::SPOT) {
 			e /= float(Math_PI_CONST);
+		} else if (p_type == GILight::AREA) {
+			e /= 2.0f * float(Math_PI_CONST);
 		}
 	}
 	Color c = p_light->get_color().srgb_to_linear();
@@ -338,6 +341,25 @@ void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unorder
 			l.range = ol->get_param(Light3D::PARAM_RANGE);
 			l.attenuation = ol->get_param(Light3D::PARAM_ATTENUATION);
 			l.shadow = ol->has_shadow();
+			r_snap.lights.push_back(l);
+		}
+	} else if (AreaLight3D *al = Object::cast_to<AreaLight3D>(p_node)) {
+		const Vector2 sz = al->get_area_size();
+		if (al->is_visible_in_tree() && sz.x > 0.0f && sz.y > 0.0f) {
+			// Godot: a one-sided rectangle (local X width, Y height) of uniform radiance emitting along
+			// -Z, radiance = color * energy (/ area with area_normalize_energy), LTC integrated; the
+			// distance window is Godot's omni attenuation at the closest point of the rectangle times d^2.
+			const Basis b = al->get_global_transform().basis;
+			GILight l;
+			l.type = GILight::AREA;
+			l.vec = al->get_global_position();
+			l.spot_dir = -b.get_column(2).normalized();
+			l.area_a = b.get_column(0).normalized() * (0.5f * sz.x);
+			l.area_b = b.get_column(1).normalized() * (0.5f * sz.y);
+			l.color = light_color(al, GILight::AREA, physical_units, exposure_scale) / (al->is_area_normalizing_energy() ? sz.x * sz.y : 1.0f);
+			l.range = al->get_param(Light3D::PARAM_RANGE);
+			l.attenuation = al->get_param(Light3D::PARAM_ATTENUATION);
+			l.shadow = al->has_shadow();
 			r_snap.lights.push_back(l);
 		}
 	} else if (SpotLight3D *sl = Object::cast_to<SpotLight3D>(p_node)) {

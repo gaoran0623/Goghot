@@ -567,11 +567,14 @@ bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap, bool p_deformed,
 		float color_range[4];
 		float params[4];
 		float spot[4];
+		float area_a[4];
+		float area_b[4];
 	};
 	std::vector<LightRow> lrows;
 	for (const GILight &l : p_snap.lights) {
 		lrows.push_back({ { l.vec.x, l.vec.y, l.vec.z, float(l.type) }, { l.color.r, l.color.g, l.color.b, l.range },
-				{ l.attenuation, l.shadow ? 1.0f : 0.0f, l.spot_exp, 0.0f }, { l.spot_dir.x, l.spot_dir.y, l.spot_dir.z, l.spot_cos } });
+				{ l.attenuation, l.shadow ? 1.0f : 0.0f, l.spot_exp, 0.0f }, { l.spot_dir.x, l.spot_dir.y, l.spot_dir.z, l.spot_cos },
+				{ l.area_a.x, l.area_a.y, l.area_a.z, 0.0f }, { l.area_b.x, l.area_b.y, l.area_b.z, 0.0f } });
 	}
 	lights_used = uint32_t(lrows.size());
 	if (MAX(lights_used, 1u) > light_capacity) {

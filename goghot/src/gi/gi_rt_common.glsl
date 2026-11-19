@@ -25,7 +25,9 @@ struct Light {
 	vec4 vec_type; // xyz: direction light travels (directional) or position (omni / spot); w: 0 dir, 1 omni, 2 spot
 	vec4 color_range; // rgb: linear color * energy; w: range
 	vec4 params; // x: attenuation exponent, y: casts shadow, z: spot cone exponent (1 / spot_angle_attenuation)
-	vec4 spot; // xyz: spot direction, w: cos of the cone half angle
+	vec4 spot; // xyz: spot direction (area: emission direction), w: cos of the cone half angle
+	vec4 area_a; // area: xyz half width vector
+	vec4 area_b; // area: xyz half height vector
 };
 layout(set = 0, binding = 8, std430) restrict readonly buffer Lights { Light lights[]; };
 layout(set = 0, binding = 10, std430) restrict writeonly buffer FogRays { vec4 fog_rays[]; };

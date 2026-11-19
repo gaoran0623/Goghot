@@ -18,6 +18,8 @@ struct Light {
 	vec4 color_range;
 	vec4 params;
 	vec4 spot;
+	vec4 area_a;
+	vec4 area_b;
 };
 layout(set = 0, binding = 12, std430) restrict readonly buffer Lights { Light lights[]; };
 
@@ -28,6 +30,36 @@ float omni_attenuation(float dist, float range, float decay) {
 	nd = max(1.0 - nd, 0.0);
 	nd *= nd;
 	return nd * pow(max(dist, 1e-4), -decay);
+}
+
+// Area light (type 3): one random point q on the rectangle (seed), its single sample estimate of
+// the rectangle's irradiance: radiance * cos_light * area / d^2 (times Godot's distance window at the
+// closest point). Returns false when p is behind the light. L / dist point to q (shadow ray target).
+bool area_light_sample(Light l, vec3 p, uint seed, out vec3 L, out float dist, out float atten) {
+	vec3 c = l.vec_type.xyz;
+	vec3 e = l.spot.xyz;
+	atten = 0.0;
+	L = vec3(0.0, 1.0, 0.0);
+	dist = 1.0;
+	if (dot(p - c, e) <= 0.0) {
+		return false;
+	}
+	float ha = length(l.area_a.xyz), hb = length(l.area_b.xyz);
+	vec3 ua = l.area_a.xyz / max(ha, 1e-6), ub = l.area_b.xyz / max(hb, 1e-6);
+	vec3 rel = p - c;
+	vec3 closest = c + ua * clamp(dot(rel, ua), -ha, ha) + ub * clamp(dot(rel, ub), -hb, hb);
+	float dc = max(distance(p, closest), 1e-4);
+	float window = omni_attenuation(dc, l.color_range.w, l.params.x) * dc * dc;
+	vec3 q = c + l.area_a.xyz * (hash_f(seed) * 2.0 - 1.0) + l.area_b.xyz * (hash_f(seed + 1u) * 2.0 - 1.0);
+	vec3 d = q - p;
+	dist = max(length(d), 1e-4);
+	L = d / dist;
+	float cos_l = dot(-L, e);
+	if (cos_l <= 0.0) {
+		return false;
+	}
+	atten = window * cos_l * (4.0 * ha * hb) / (dist * dist);
+	return true;
 }
 
 // Omni / spot distance attenuation (Godot's), times Godot's spot cone falloff for spots.
@@ -53,6 +85,11 @@ vec3 face_lit(ivec3 t, vec3 p, float size, vec3 n, vec3 albedo, vec3 emission) {
 		if (l.vec_type.w < 0.5) {
 			L = -l.vec_type.xyz;
 			dist = 1e4;
+		} else if (l.vec_type.w > 2.5) {
+			uint seed = uint(t.x + t.y * 131 + t.z * 17161) * 7919u + uint(fr.frame) * 2654435u + uint(i) * 104729u + (n.x + n.y + n.z > 0.0 ? 0u : 31u);
+			if (!area_light_sample(l, p, seed, L, dist, atten)) {
+				continue;
+			}
 		} else {
 			vec3 d = l.vec_type.xyz - p;
 			dist = length(d);
@@ -66,7 +103,18 @@ vec3 face_lit(ivec3 t, vec3 p, float size, vec3 n, vec3 albedo, vec3 emission) {
 		float vis = 1.0;
 		if (l.params.y > 0.5) {
 			// Start off the face so the voxel (and its grown neighbours) do not shadow it.
-			vis = vox_trace(p + n * size * 1.5, L, dist - size * 2.0, 0.5, ht, hc) < 0.0 ? 1.0 : 0.0;
+			vec3 so = p + n * size * 1.5;
+			float tmax = dist - size * 2.0;
+			if (l.vec_type.w > 2.5) {
+				// Area lights usually sit on a wall / ceiling, whose (conservatively thickened) voxels
+				// would block grazing shadow rays before they reach the panel: stop the ray 1.5 voxels
+				// in front of the panel's plane instead (occluders in the room still count).
+				float le = dot(L, l.spot.xyz); // < 0: towards the panel
+				if (le < -1e-4) {
+					tmax = min(tmax, (size * 1.5 - dot(so - l.vec_type.xyz, l.spot.xyz)) / le);
+				}
+			}
+			vis = tmax <= 0.0 || vox_trace(so, L, tmax, 0.5, ht, hc) < 0.0 ? 1.0 : 0.0;
 		}
 		direct += l.color_range.rgb * (ndl * atten * vis);
 	}

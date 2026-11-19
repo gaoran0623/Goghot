@@ -63,10 +63,11 @@ struct GIInstance {
 };
 
 struct GILight {
-	enum Type { DIRECTIONAL = 0, OMNI = 1, SPOT = 2 };
+	enum Type { DIRECTIONAL = 0, OMNI = 1, SPOT = 2, AREA = 3 };
 	Type type;
 	godot::Vector3 vec; // DIRECTIONAL: direction light travels; OMNI / SPOT: position
-	godot::Vector3 spot_dir; // SPOT: direction the cone points
+	godot::Vector3 spot_dir; // SPOT: direction the cone points; AREA: direction the rectangle emits to
+	godot::Vector3 area_a, area_b; // AREA: half width / half height vectors of the rectangle
 	float spot_cos = -1.0f; // SPOT: cos of the cone half angle
 	float spot_exp = 1.0f; // SPOT: Godot's 1 / spot_angle_attenuation
 	godot::Color color; // linear * energy (non-physical units, as Godot shades it)
