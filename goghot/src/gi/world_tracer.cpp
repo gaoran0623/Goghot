@@ -187,16 +187,31 @@ void GIWorldTracer::clear_cache() {
 	}
 }
 
-void GIWorldTracer::_free_geometry() {
-	for (MeshGPU &m : meshes) {
-		if (m.blas.is_valid()) {
-			rd->free_rid(m.blas);
-		}
-		if (m.sbt_range >= 0) {
-			rd->hit_sbt_range_free(hit_sbt, m.sbt_range);
-		}
+void GIWorldTracer::_free_cached_mesh(CachedMesh &p_mesh) {
+	if (p_mesh.blas.is_valid()) {
+		rd->free_rid(p_mesh.blas);
 	}
-	meshes.clear();
+	if (p_mesh.sbt_range >= 0 && hit_sbt.is_valid()) {
+		rd->hit_sbt_range_free(hit_sbt, p_mesh.sbt_range);
+	}
+	for (const RID &b : p_mesh.index_buffers) {
+		rd->free_rid(b);
+	}
+	if (p_mesh.vertex_buffer.is_valid()) {
+		rd->free_rid(p_mesh.vertex_buffer);
+	}
+	p_mesh = CachedMesh();
+}
+
+void GIWorldTracer::_free_mesh_cache() {
+	for (auto &kv : mesh_gpu_cache) {
+		_free_cached_mesh(kv.second);
+	}
+	mesh_gpu_cache.clear();
+}
+
+void GIWorldTracer::_free_geometry() {
+	meshes.clear(); // their BLASes live in mesh_gpu_cache
 	// A deformed BLAS depends on Godot's deformed vertex buffer: when that buffer is freed (instance
 	// deleted, engine shutdown) RD frees the BLAS with it, and there is no RD query for BLAS validity.
 	// So only free the ones whose instance is still alive (see p_alive), leave the rest to RD.
@@ -211,10 +226,6 @@ void GIWorldTracer::_free_geometry() {
 	}
 	deformed.clear();
 	deformed_by_instance.clear();
-	for (const RID &b : blas_index_buffers) {
-		rd->free_rid(b);
-	}
-	blas_index_buffers.clear();
 	for (RID *r : { &vertex_buffer, &normal_storage, &index_storage, &uv_storage, &position_storage }) {
 		if (r->is_valid()) {
 			rd->free_rid(*r);
@@ -230,6 +241,7 @@ void GIWorldTracer::free() {
 	}
 	alive_deformed.clear(); // shutdown / effect freed: deformed BLASes go with Godot's buffers
 	_free_geometry();
+	_free_mesh_cache();
 	_free_voxel();
 	for (RID *r : { &tlas, &geo_buffer, &light_buffer, &cache, &cache_resolve_shader, &rt_shader, &shadow_miss_shader, &white_texture, &texture_sampler, &skin_normals_shader }) {
 		if (r->is_valid()) {
@@ -291,8 +303,8 @@ void GIWorldTracer::_rebuild_geometry(const GISceneSnapshot &p_snap) {
 	const BitField<RD::BufferCreationBits> build_input = RD::BUFFER_CREATION_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT | RD::BUFFER_CREATION_DEVICE_ADDRESS_BIT;
 	PackedByteArray pos_bytes = bytes_of(positions);
 	PackedByteArray idx_bytes = bytes_of(indices);
-	if (build_rt) {
-		vertex_buffer = rd->vertex_buffer_create(pos_bytes.size(), pos_bytes, build_input);
+	if (!build_rt) {
+		_free_mesh_cache();
 	}
 	position_storage = _storage(pos_bytes);
 	normal_storage = _storage(bytes_of(normals));
@@ -309,39 +321,63 @@ void GIWorldTracer::_rebuild_geometry(const GISceneSnapshot &p_snap) {
 			meshes.push_back(gpu);
 			continue;
 		}
-		TypedArray<RDAccelerationStructureGeometry> geoms;
-		std::vector<RID> index_buffers_of_mesh;
-		for (const GIMeshCPU::Surface &s : m.surfaces) {
-			Ref<RDAccelerationStructureGeometry> g;
-			g.instantiate();
-			g->set_flags(RD::ACCELERATION_STRUCTURE_GEOMETRY_OPAQUE_BIT);
-			g->set_vertex_buffer(vertex_buffer);
-			g->set_vertex_offset((bases[mi].vertex + s.vertex_base) * 12);
-			g->set_vertex_count(s.vertex_count);
-			g->set_vertex_stride(12);
-			g->set_vertex_format(RD::DATA_FORMAT_R32G32B32_SFLOAT);
-			std::vector<uint32_t> sidx(m.indices.begin() + s.index_base, m.indices.begin() + s.index_base + s.index_count);
-			RID ib = rd->index_buffer_create(s.index_count, RD::INDEX_BUFFER_FORMAT_UINT32, bytes_of(sidx), false, build_input);
-			blas_index_buffers.push_back(ib);
-			index_buffers_of_mesh.push_back(ib);
-			g->set_index_buffer(ib);
-			g->set_index_offset(0);
-			g->set_index_count(s.index_count);
-			geoms.push_back(g);
+		auto cit = mesh_gpu_cache.find(m.id);
+		if (cit == mesh_gpu_cache.end()) {
+			CachedMesh cm;
+			cm.surface_count = uint32_t(m.surfaces.size());
+			const PackedByteArray vb = bytes_of(m.positions);
+			cm.vertex_buffer = rd->vertex_buffer_create(vb.size(), vb, build_input);
+			TypedArray<RDAccelerationStructureGeometry> geoms;
+			for (const GIMeshCPU::Surface &s : m.surfaces) {
+				Ref<RDAccelerationStructureGeometry> g;
+				g.instantiate();
+				g->set_flags(RD::ACCELERATION_STRUCTURE_GEOMETRY_OPAQUE_BIT);
+				g->set_vertex_buffer(cm.vertex_buffer);
+				g->set_vertex_offset(s.vertex_base * 12);
+				g->set_vertex_count(s.vertex_count);
+				g->set_vertex_stride(12);
+				g->set_vertex_format(RD::DATA_FORMAT_R32G32B32_SFLOAT);
+				std::vector<uint32_t> sidx(m.indices.begin() + s.index_base, m.indices.begin() + s.index_base + s.index_count);
+				RID ib = rd->index_buffer_create(s.index_count, RD::INDEX_BUFFER_FORMAT_UINT32, bytes_of(sidx), false, build_input);
+				cm.index_buffers.push_back(ib);
+				g->set_index_buffer(ib);
+				g->set_index_offset(0);
+				g->set_index_count(s.index_count);
+				geoms.push_back(g);
+			}
+			cm.blas = rd->blas_create(geoms, RD::ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT);
+			rd->blas_build(cm.blas);
+			cm.sbt_range = rd->hit_sbt_range_alloc(hit_sbt, cm.surface_count);
+			PackedInt32Array groups;
+			groups.resize(cm.surface_count);
+			groups.fill(0);
+			rd->hit_sbt_range_update(hit_sbt, cm.sbt_range, 0, groups);
+			cit = mesh_gpu_cache.emplace(m.id, std::move(cm)).first;
+			stats.last_rebuild_new_blas++;
 		}
+		const CachedMesh &cm = cit->second;
 		MeshGPU gpu;
-		gpu.surface_count = uint32_t(m.surfaces.size());
-		gpu.index_buffers = index_buffers_of_mesh;
+		gpu.surface_count = cm.surface_count;
+		gpu.index_buffers = cm.index_buffers;
 		gpu.vertex_base = bases[mi].vertex;
 		gpu.index_base = bases[mi].index;
-		gpu.blas = rd->blas_create(geoms, RD::ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT);
-		rd->blas_build(gpu.blas);
-		gpu.sbt_range = rd->hit_sbt_range_alloc(hit_sbt, gpu.surface_count);
-		PackedInt32Array groups;
-		groups.resize(gpu.surface_count);
-		groups.fill(0);
-		rd->hit_sbt_range_update(hit_sbt, gpu.sbt_range, 0, groups);
+		gpu.blas = cm.blas;
+		gpu.sbt_range = cm.sbt_range;
 		meshes.push_back(gpu);
+	}
+	if (build_rt) {
+		std::unordered_set<uint64_t> present;
+		for (const auto &m : p_snap.meshes) {
+			present.insert(m->id);
+		}
+		for (auto it = mesh_gpu_cache.begin(); it != mesh_gpu_cache.end();) {
+			if (!present.count(it->first)) {
+				_free_cached_mesh(it->second);
+				it = mesh_gpu_cache.erase(it);
+			} else {
+				++it;
+			}
+		}
 	}
 	mesh_set_hash = p_snap.mesh_set_hash;
 }
@@ -513,6 +549,7 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 			built_mesh_ids = std::move(ids);
 			built_deformed_ids = std::move(dids);
 		}
+		stats.last_rebuild_new_blas = 0;
 		_rebuild_geometry(p_snap);
 		stats.rebuild_ms = double(Time::get_singleton()->get_ticks_usec() - r0) / 1000.0;
 		stats.rebuilds++;

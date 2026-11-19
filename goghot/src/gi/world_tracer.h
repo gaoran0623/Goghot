@@ -32,6 +32,7 @@ public:
 		uint64_t deformed_triangles_built = 0; // deformed BLAS triangles rebuilt this frame (budget)
 		uint32_t last_rebuild_added = 0, last_rebuild_removed = 0; // meshes vs the previous build
 		bool last_rebuild_deformed_changed = false;
+		uint32_t last_rebuild_new_blas = 0; // BLASes built by the last rebuild (others reused)
 	};
 	Stats stats;
 	std::vector<uint64_t> built_mesh_ids, built_deformed_ids; // sorted, of the current build (diagnostics)
@@ -91,7 +92,6 @@ private:
 	uint64_t mesh_set_hash = 0;
 	godot::RID vertex_buffer, normal_storage, index_storage, uv_storage;
 	godot::RID position_storage; // packed float3, bindable as storage (voxelization)
-	std::vector<godot::RID> blas_index_buffers; // one per surface: RD validates indices against the whole buffer
 	static constexpr uint32_t MAX_TEXTURES = 128;
 	godot::RID white_texture, texture_sampler;
 	godot::TypedArray<godot::RID> texture_table;
@@ -103,6 +103,18 @@ private:
 		uint32_t vertex_base = 0, index_base = 0; // into the global buffers
 	};
 	std::vector<MeshGPU> meshes;
+	// Tier A: BLAS (+ its own vertex / index buffers and SBT range) per mesh id, kept across geometry
+	// rebuilds: a rebuild (mesh added / removed, e.g. streaming) only builds the new meshes' BLASes.
+	struct CachedMesh {
+		godot::RID vertex_buffer;
+		std::vector<godot::RID> index_buffers;
+		godot::RID blas;
+		int64_t sbt_range = -1;
+		uint32_t surface_count = 0;
+	};
+	std::unordered_map<uint64_t, CachedMesh> mesh_gpu_cache;
+	void _free_cached_mesh(CachedMesh &p_mesh);
+	void _free_mesh_cache();
 	// Deformed instances: own BLAS over Godot's per-instance deformed vertex buffers (engine patch 2),
 	// rebuilt every frame; normals decoded into their own region of the normal buffer.
 	struct DeformedGPU {

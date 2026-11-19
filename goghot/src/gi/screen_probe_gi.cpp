@@ -704,6 +704,7 @@ Dictionary GoghotScreenProbeGI::get_stats() const {
 	d["last_rebuild_added"] = s.last_rebuild_added;
 	d["last_rebuild_removed"] = s.last_rebuild_removed;
 	d["last_rebuild_deformed_changed"] = s.last_rebuild_deformed_changed;
+	d["last_rebuild_new_blas"] = s.last_rebuild_new_blas;
 	return d;
 }
 

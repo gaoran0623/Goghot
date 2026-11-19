@@ -1,4 +1,8 @@
 #include "gi_scene.h"
+#include <godot_cpp/core/object.hpp>
+#include <godot_cpp/variant/callable_method_pointer.hpp>
+#include <godot_cpp/classes/node3d.hpp>
+#include <godot_cpp/classes/light3d.hpp>
 
 #include <algorithm>
 
@@ -304,6 +308,47 @@ static Color light_color(const Light3D *p_light, GILight::Type p_type, bool p_ph
 
 void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index) {
 	nodes_visited++;
+	if (_collect_node(p_node, r_snap, r_mesh_index)) {
+		relevant_nodes.push_back(p_node->get_instance_id());
+	}
+	for (int i = 0; i < p_node->get_child_count(); i++) {
+		_collect(p_node->get_child(i), r_snap, r_mesh_index);
+	}
+}
+
+void GoghotGIScene::_on_tree_changed(Node *p_node) {
+	if (Object::cast_to<Node3D>(p_node) != nullptr) {
+		tree_dirty = true; // a 3D node came or went: walk the tree again on the next update
+	}
+}
+
+void GoghotGIScene::_notification(int p_what) {
+	if (p_what == NOTIFICATION_ENTER_TREE) {
+		tree_dirty = true;
+		SceneTree *tree = get_tree();
+		const Callable cb = callable_mp(this, &GoghotGIScene::_on_tree_changed);
+		if (!tree->is_connected("node_added", cb)) {
+			tree->connect("node_added", cb);
+			tree->connect("node_removed", cb);
+		}
+	} else if (p_what == NOTIFICATION_EXIT_TREE) {
+		SceneTree *tree = get_tree();
+		const Callable cb = callable_mp(this, &GoghotGIScene::_on_tree_changed);
+		if (tree && tree->is_connected("node_added", cb)) {
+			tree->disconnect("node_added", cb);
+			tree->disconnect("node_removed", cb);
+		}
+		relevant_nodes.clear();
+	}
+}
+
+// Collects one node (no recursion). Returns whether the node is of a kind that contributes (geometry or
+// light), whatever its current visibility: such nodes are re-read every update from relevant_nodes.
+bool GoghotGIScene::_collect_node(Node *p_node, GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index) {
+	const bool relevant = Object::cast_to<GeometryInstance3D>(p_node) != nullptr || Object::cast_to<GridMap>(p_node) != nullptr || Object::cast_to<Light3D>(p_node) != nullptr;
+	if (!relevant) {
+		return false;
+	}
 	GeometryInstance3D *geo = Object::cast_to<GeometryInstance3D>(p_node);
 	const bool geo_on = geo != nullptr && geo->is_visible_in_tree() && geo->get_gi_mode() != GeometryInstance3D::GI_MODE_DISABLED;
 	if (MeshInstance3D *mi = Object::cast_to<MeshInstance3D>(p_node)) {
@@ -506,9 +551,7 @@ void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unorder
 			r_snap.lights.push_back(l);
 		}
 	}
-	for (int i = 0; i < p_node->get_child_count(); i++) {
-		_collect(p_node->get_child(i), r_snap, r_mesh_index);
-	}
+	return true;
 }
 
 void GoghotGIScene::update_now() {
@@ -535,7 +578,24 @@ void GoghotGIScene::update_now() {
 	if (root == nullptr) {
 		return;
 	}
-	_collect(root, *snap, mesh_index);
+	// Full tree walk only when 3D nodes were added / removed (or the root changed); otherwise only the
+	// geometry / light nodes found by the last walk are read (12k-node scenes: the walk itself cost ms).
+	if (tree_dirty || relevant_root != root->get_instance_id()) {
+		relevant_nodes.clear();
+		relevant_root = root->get_instance_id();
+		tree_dirty = false;
+		_collect(root, *snap, mesh_index);
+	} else {
+		for (const uint64_t id : relevant_nodes) {
+			Node *n = Object::cast_to<Node>(ObjectDB::get_instance(id));
+			if (n == nullptr || !n->is_inside_tree()) {
+				tree_dirty = true; // freed without node_removed reaching us: walk again next update
+				continue;
+			}
+			nodes_visited++;
+			_collect_node(n, *snap, mesh_index);
+		}
+	}
 	// Canonical mesh order (by id): the same set of meshes always gives the same order and hash, so the
 	// world tracer does not rebuild all geometry when only the scene tree order changed.
 	{

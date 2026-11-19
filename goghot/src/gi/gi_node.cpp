@@ -315,6 +315,9 @@ void GoghotGI::_process(double p_delta) {
 		}
 		return;
 	}
+	if (!enabled) {
+		return; // effects are detached by set_enabled; no scene collection either
+	}
 	Object *holder = attached_owner.is_valid() ? ObjectDB::get_instance(uint64_t(attached_owner)) : nullptr;
 	if (attached.is_null() || holder == nullptr) {
 		_attach();
@@ -345,8 +348,8 @@ void GoghotGI::_process(double p_delta) {
 			stats_next_usec = now + 2000000;
 			const Dictionary w = gi->get_stats();
 			const Dictionary c = get_collect_stats();
-			UtilityFunctions::print(vformat("GoghotGI: tier %s | collect %.2f ms (%d nodes, %d new meshes, cache %d, %d culled) | tracer update %.2f ms, %d rebuilds (last %.1f ms: +%d -%d meshes%s) | %d instances, %d meshes, %d surfaces, %d tris | %d deformed (%d tris), %d tris rebuilt this frame",
-					w["tier"], c["collect_ms"], c["nodes_visited"], c["new_meshes"], c["mesh_cache"], c["culled"], w["update_ms"], w["rebuilds"], w["rebuild_ms"], w["last_rebuild_added"], w["last_rebuild_removed"], bool(w["last_rebuild_deformed_changed"]) ? ", deformed set changed" : "",
+			UtilityFunctions::print(vformat("GoghotGI: tier %s | collect %.2f ms (%d nodes, %d new meshes, cache %d, %d culled) | tracer update %.2f ms, %d rebuilds (last %.1f ms: +%d -%d meshes, %d new BLAS%s) | %d instances, %d meshes, %d surfaces, %d tris | %d deformed (%d tris), %d tris rebuilt this frame",
+					w["tier"], c["collect_ms"], c["nodes_visited"], c["new_meshes"], c["mesh_cache"], c["culled"], w["update_ms"], w["rebuilds"], w["rebuild_ms"], w["last_rebuild_added"], w["last_rebuild_removed"], w["last_rebuild_new_blas"], bool(w["last_rebuild_deformed_changed"]) ? ", deformed set changed" : "",
 					w["instances"], w["meshes"], w["surfaces"], w["triangles"], w["deformed"], w["deformed_triangles"], w["deformed_triangles_built"]));
 		}
 	}

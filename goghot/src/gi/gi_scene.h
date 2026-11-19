@@ -156,6 +156,14 @@ protected:
 			const std::shared_ptr<const std::vector<GIMaterial>> &p_materials = nullptr);
 
 	void _collect(godot::Node *p_node, GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index);
+	bool _collect_node(godot::Node *p_node, GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index);
+	// Geometry / light nodes of the last full walk; the tree is walked again only when 3D nodes are
+	// added or removed (SceneTree node_added / node_removed).
+	std::vector<uint64_t> relevant_nodes;
+	uint64_t relevant_root = 0;
+	bool tree_dirty = true;
+	void _on_tree_changed(godot::Node *p_node);
+	void _notification(int p_what);
 	std::shared_ptr<const GIMeshCPU> _get_mesh(const godot::Ref<godot::Resource> &p_mesh);
 
 	static void _bind_methods();
