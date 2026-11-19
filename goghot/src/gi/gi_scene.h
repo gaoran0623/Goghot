@@ -101,6 +101,10 @@ protected:
 	// Light units, refreshed every update: physical light units project setting and the active camera
 	// attributes' exposure normalization (exposure_multiplier, times the physical camera / sensitivity
 	// normalization when physical units are on), which Godot applies to lights and emission.
+	// Collection statistics of the last update (CPU, main thread).
+	double collect_ms = 0.0;
+	uint64_t nodes_visited = 0;
+	uint64_t new_meshes = 0; // meshes read from the Mesh resource this frame (mesh cache misses)
 	bool physical_units = false;
 	float exposure_scale = 1.0f;
 	void _update_units();
@@ -125,6 +129,7 @@ public:
 	void _process(double p_delta) override;
 	void update_now();
 	void set_editor_preview(bool p_enable);
+	godot::Dictionary get_collect_stats() const;
 	bool get_editor_preview() const;
 
 	void set_gi(const godot::Ref<GoghotScreenProbeGI> &p_gi);

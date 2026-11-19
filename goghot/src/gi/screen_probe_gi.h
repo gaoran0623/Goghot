@@ -187,6 +187,7 @@ public:
 	GOGHOT_PROP(int, voxel_bounce_rays)
 	GOGHOT_PROP(int, voxel_cache_max_frames)
 	int get_active_tier() const { return active_tier; } // 1 = A, 2 = B, 3 = C
+	godot::Dictionary get_stats() const; // world tracer statistics of the last frame (see GIWorldTracer::Stats)
 	GOGHOT_PROP(float, reflection_max_roughness)
 	GOGHOT_PROP(int, reflection_min_frames)
 	GOGHOT_PROP(int, reflection_max_frames)

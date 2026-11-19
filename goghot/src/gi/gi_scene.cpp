@@ -9,6 +9,7 @@
 #include <godot_cpp/classes/camera_attributes.hpp>
 #include <godot_cpp/classes/camera_attributes_physical.hpp>
 #include <godot_cpp/classes/project_settings.hpp>
+#include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/core/math.hpp>
 #include <godot_cpp/classes/environment.hpp>
 #include <godot_cpp/classes/viewport.hpp>
@@ -49,6 +50,7 @@ std::shared_ptr<const GIMeshCPU> GoghotGIScene::_get_mesh(const Ref<Resource> &p
 	if (it != mesh_cache.end()) {
 		return it->second;
 	}
+	new_meshes++;
 	auto m = std::make_shared<GIMeshCPU>();
 	m->id = id;
 	for (int s = 0; s < mesh->get_surface_count(); s++) {
@@ -257,6 +259,7 @@ static Color light_color(const Light3D *p_light, GILight::Type p_type, bool p_ph
 }
 
 void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index) {
+	nodes_visited++;
 	GeometryInstance3D *geo = Object::cast_to<GeometryInstance3D>(p_node);
 	const bool geo_on = geo != nullptr && geo->is_visible_in_tree() && geo->get_gi_mode() != GeometryInstance3D::GI_MODE_DISABLED;
 	if (MeshInstance3D *mi = Object::cast_to<MeshInstance3D>(p_node)) {
@@ -388,6 +391,9 @@ void GoghotGIScene::update_now() {
 	if (gi.is_null() || !is_inside_tree()) {
 		return;
 	}
+	const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
+	nodes_visited = 0;
+	new_meshes = 0;
 	_update_units();
 	auto snap = std::make_shared<GISceneSnapshot>();
 	std::unordered_map<uint64_t, uint32_t> mesh_index;
@@ -420,6 +426,16 @@ void GoghotGIScene::update_now() {
 		snap->fog_length = env->get_volumetric_fog_length();
 	}
 	gi->set_scene_snapshot(snap);
+	collect_ms = double(Time::get_singleton()->get_ticks_usec() - t0) / 1000.0;
+}
+
+Dictionary GoghotGIScene::get_collect_stats() const {
+	Dictionary d;
+	d["collect_ms"] = collect_ms;
+	d["nodes_visited"] = int64_t(nodes_visited);
+	d["new_meshes"] = int64_t(new_meshes);
+	d["mesh_cache"] = int64_t(mesh_cache.size());
+	return d;
 }
 
 Node *GoghotGIScene::_scene_root() const {
@@ -457,6 +473,7 @@ void GoghotGIScene::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_gi", "gi"), &GoghotGIScene::set_gi);
 	ClassDB::bind_method(D_METHOD("get_gi"), &GoghotGIScene::get_gi);
 	ClassDB::bind_method(D_METHOD("update_now"), &GoghotGIScene::update_now);
+	ClassDB::bind_method(D_METHOD("get_collect_stats"), &GoghotGIScene::get_collect_stats);
 	ClassDB::bind_method(D_METHOD("set_editor_preview", "enable"), &GoghotGIScene::set_editor_preview);
 	ClassDB::bind_method(D_METHOD("get_editor_preview"), &GoghotGIScene::get_editor_preview);
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "editor_preview"), "set_editor_preview", "get_editor_preview");

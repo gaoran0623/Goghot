@@ -7,6 +7,8 @@
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/classes/texture2d.hpp>
+#include <godot_cpp/classes/time.hpp>
+#include <godot_cpp/variant/utility_functions.hpp>
 #include <godot_cpp/core/math.hpp>
 #include <godot_cpp/classes/panorama_sky_material.hpp>
 #include <godot_cpp/classes/physical_sky_material.hpp>
@@ -337,6 +339,17 @@ void GoghotGI::_process(double p_delta) {
 		gi->set_sky_sh(sh);
 	}
 	GoghotGIScene::_process(p_delta);
+	if (print_stats && gi.is_valid()) {
+		const uint64_t now = Time::get_singleton()->get_ticks_usec();
+		if (now >= stats_next_usec) {
+			stats_next_usec = now + 2000000;
+			const Dictionary w = gi->get_stats();
+			const Dictionary c = get_collect_stats();
+			UtilityFunctions::print(vformat("GoghotGI: tier %s | collect %.2f ms (%d nodes, %d new meshes, cache %d) | tracer update %.2f ms, %d rebuilds (last %.1f ms) | %d instances, %d meshes, %d surfaces, %d tris | %d deformed, %d tris rebuilt per frame",
+					w["tier"], c["collect_ms"], c["nodes_visited"], c["new_meshes"], c["mesh_cache"], w["update_ms"], w["rebuilds"], w["rebuild_ms"],
+					w["instances"], w["meshes"], w["surfaces"], w["triangles"], w["deformed"], w["deformed_triangles"]));
+		}
+	}
 }
 
 void GoghotGI::_validate_property(PropertyInfo &p_property) const {
@@ -405,6 +418,9 @@ void GoghotGI::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "auto_exposure"), "set_auto_exposure", "get_auto_exposure");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_view", PROPERTY_HINT_ENUM, "Off,GI,Reflections,Probes,Voxels"), "set_debug_view", "get_debug_view");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "sky_from_environment"), "set_sky_from_environment", "get_sky_from_environment");
+	ClassDB::bind_method(D_METHOD("set_print_stats", "enable"), &GoghotGI::set_print_stats);
+	ClassDB::bind_method(D_METHOD("get_print_stats"), &GoghotGI::get_print_stats);
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "print_stats"), "set_print_stats", "get_print_stats");
 }
 
 } // namespace goghot

@@ -20,6 +20,16 @@ namespace goghot {
 // material table, light table) and the radiance cache.
 class GIWorldTracer {
 public:
+	// Per frame statistics (render thread, read by GoghotScreenProbeGI::get_stats).
+	struct Stats {
+		double update_ms = 0.0; // CPU time of update_scene
+		double rebuild_ms = 0.0; // CPU time of the last geometry rebuild
+		uint64_t rebuilds = 0; // geometry rebuilds (BLAS / buffers) since start
+		uint64_t frames = 0;
+		uint32_t instances = 0, surfaces = 0, meshes = 0, deformed = 0;
+		uint64_t triangles = 0, deformed_triangles = 0; // per frame: all instances / deformed (BLAS rebuilt every frame)
+	};
+	Stats stats;
 	enum Tier {
 		TIER_A_RT,
 		TIER_B_VOXEL,
@@ -144,6 +154,7 @@ private:
 	void _ensure_voxel_textures(int p_res);
 	void _voxel_dispatch_pc(int64_t p_list, const VoxDraw *p_draw, uint32_t p_draw_id, const int p_lo[4], const int p_hi[4]);
 	void _rebuild_geometry(const GISceneSnapshot &p_snap);
+	bool _update_scene(const GISceneSnapshot &p_snap, bool p_deformed, Tier p_tier);
 	godot::RID _storage(const godot::PackedByteArray &p_data);
 };
 

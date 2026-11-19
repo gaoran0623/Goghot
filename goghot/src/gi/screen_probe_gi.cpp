@@ -685,6 +685,23 @@ Ref<GoghotGIColorCapture> GoghotScreenProbeGI::create_color_capture() {
 	return c;
 }
 
+Dictionary GoghotScreenProbeGI::get_stats() const {
+	const GIWorldTracer::Stats &s = world.stats;
+	Dictionary d;
+	d["tier"] = active_tier;
+	d["update_ms"] = s.update_ms;
+	d["rebuild_ms"] = s.rebuild_ms;
+	d["rebuilds"] = int64_t(s.rebuilds);
+	d["frames"] = int64_t(s.frames);
+	d["meshes"] = s.meshes;
+	d["instances"] = s.instances;
+	d["surfaces"] = s.surfaces;
+	d["triangles"] = int64_t(s.triangles);
+	d["deformed"] = s.deformed;
+	d["deformed_triangles"] = int64_t(s.deformed_triangles);
+	return d;
+}
+
 void GoghotScreenProbeGI::set_scene_snapshot(std::shared_ptr<const GISceneSnapshot> p_scene) {
 	std::lock_guard<std::mutex> lock(scene_mutex);
 	pending_scene = std::move(p_scene);
@@ -749,6 +766,7 @@ void GoghotScreenProbeGI::_bind_methods() {
 	GOGHOT_BIND(Variant::INT, voxel_bounce_rays, PROPERTY_HINT_RANGE, "1,16,1")
 	GOGHOT_BIND(Variant::INT, voxel_cache_max_frames, PROPERTY_HINT_RANGE, "1,256,1")
 	ClassDB::bind_method(D_METHOD("get_active_tier"), &GoghotScreenProbeGI::get_active_tier);
+	ClassDB::bind_method(D_METHOD("get_stats"), &GoghotScreenProbeGI::get_stats);
 	GOGHOT_BIND(Variant::FLOAT, reflection_max_roughness, PROPERTY_HINT_RANGE, "0,1,0.01")
 	GOGHOT_BIND(Variant::INT, reflection_min_frames, PROPERTY_HINT_RANGE, "1,64,1")
 	GOGHOT_BIND(Variant::INT, reflection_max_frames, PROPERTY_HINT_RANGE, "1,64,1")

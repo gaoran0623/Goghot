@@ -1,5 +1,7 @@
 #include "world_tracer.h"
 
+#include <godot_cpp/classes/time.hpp>
+
 #include <godot_cpp/classes/rd_acceleration_structure_geometry.hpp>
 #include <godot_cpp/classes/rd_acceleration_structure_instance.hpp>
 #include <godot_cpp/classes/rd_hit_group.hpp>
@@ -409,6 +411,32 @@ void GIWorldTracer::_update_deformed(const GISceneSnapshot &p_snap, bool p_rt) {
 }
 
 bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap, bool p_deformed, Tier p_tier) {
+	const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
+	const bool ok = _update_scene(p_snap, p_deformed, p_tier);
+	stats.update_ms = double(Time::get_singleton()->get_ticks_usec() - t0) / 1000.0;
+	stats.frames++;
+	stats.meshes = uint32_t(p_snap.meshes.size());
+	stats.instances = uint32_t(p_snap.instances.size());
+	uint64_t tris = 0, dtris = 0;
+	uint32_t surfaces = 0, deformed_count = 0;
+	for (const GIInstance &gi : p_snap.instances) {
+		const GIMeshCPU &m = *p_snap.meshes[gi.mesh];
+		surfaces += uint32_t(m.surfaces.size());
+		const uint64_t t = m.indices.size() / 3;
+		tris += t;
+		if (gi.deformed) {
+			dtris += t;
+			deformed_count++;
+		}
+	}
+	stats.surfaces = surfaces;
+	stats.triangles = tris;
+	stats.deformed = deformed_count;
+	stats.deformed_triangles = dtris;
+	return ok;
+}
+
+bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed, Tier p_tier) {
 	if (!ready) {
 		return false;
 	}
@@ -417,7 +445,10 @@ bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap, bool p_deformed,
 	}
 	if (p_snap.mesh_set_hash != mesh_set_hash || p_tier != built_tier) {
 		built_tier = p_tier;
+		const uint64_t r0 = Time::get_singleton()->get_ticks_usec();
 		_rebuild_geometry(p_snap);
+		stats.rebuild_ms = double(Time::get_singleton()->get_ticks_usec() - r0) / 1000.0;
+		stats.rebuilds++;
 	}
 	const bool rt = built_tier == TIER_A_RT;
 	if (meshes.empty()) {

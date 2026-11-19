@@ -62,6 +62,8 @@ private:
 	bool auto_exposure = false;
 	int debug_view = DEBUG_OFF;
 	bool sky_from_environment = true;
+	bool print_stats = false;
+	uint64_t stats_next_usec = 0;
 
 	godot::Ref<GoghotGIColorCapture> capture;
 	godot::Ref<GoghotHistogramExposure> exposure;
@@ -100,6 +102,8 @@ public:
 	void set_sky_from_environment(bool p_enable) { sky_from_environment = p_enable; }
 	bool get_sky_from_environment() const { return sky_from_environment; }
 	godot::Ref<GoghotScreenProbeGI> get_effect() const { return gi; }
+	void set_print_stats(bool p_enable) { print_stats = p_enable; }
+	bool get_print_stats() const { return print_stats; }
 
 	GoghotGI();
 };
