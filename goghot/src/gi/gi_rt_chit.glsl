@@ -1,0 +1,20 @@
+// World tracer closest hit: interpolated world normal, per instance-surface material, facing.
+// Facing is decided by the shading normal (Godot front faces are clockwise; instances are traced
+// with culling disabled), so winding conventions do not matter.
+layout(location = 0) rayPayloadInEXT HitPayload hit;
+hitAttributeEXT vec2 bary;
+
+void main() {
+	Geo g = geos[uint(gl_InstanceCustomIndexEXT) + uint(gl_GeometryIndexEXT)];
+	uint base = g.index_base + uint(gl_PrimitiveID) * 3u;
+	uint i0 = indices[base] + g.vertex_base;
+	uint i1 = indices[base + 1u] + g.vertex_base;
+	uint i2 = indices[base + 2u] + g.vertex_base;
+	vec3 n = normals[i0].xyz * (1.0 - bary.x - bary.y) + normals[i1].xyz * bary.x + normals[i2].xyz * bary.y;
+	n = normalize(transpose(mat3(gl_WorldToObjectEXT)) * n);
+	hit.normal = n;
+	hit.t = gl_HitTEXT;
+	hit.albedo = g.albedo.rgb;
+	hit.emission = g.emission.rgb;
+	hit.backface = dot(n, gl_WorldRayDirectionEXT) > 0.0 ? 1.0 : 0.0;
+}

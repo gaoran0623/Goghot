@@ -5,6 +5,7 @@
 #include <godot_cpp/godot.hpp>
 
 #include "exposure/histogram_exposure.h"
+#include "gi/gi_scene.h"
 #include "gi/screen_probe_gi.h"
 
 using namespace godot;
@@ -16,6 +17,7 @@ static void initialize_goghot(ModuleInitializationLevel p_level) {
 	GDREGISTER_CLASS(goghot::GoghotHistogramExposure);
 	GDREGISTER_CLASS(goghot::GoghotScreenProbeGI);
 	GDREGISTER_CLASS(goghot::GoghotGIColorCapture);
+	GDREGISTER_CLASS(goghot::GoghotGIScene);
 }
 
 static void uninitialize_goghot(ModuleInitializationLevel p_level) {

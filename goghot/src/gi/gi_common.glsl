@@ -1,6 +1,6 @@
 // Goghot screen probe GI: shared declarations. Every GI pass is COMMON + its own body.
-// Frame UBO layout must match GoghotScreenProbeGI::_update_frame_ubo (std140).
-#version 450
+// Frame UBO layout must match FrameUBO in screen_probe_gi.cpp (std140).
+// No #version here: the C++ side prepends it (and #extension lines for ray tracing stages).
 
 layout(set = 0, binding = 0, std140) uniform Frame {
 	mat4 proj; // current view -> clip (Vulkan corrected: reverse Z, flipped Y)
@@ -29,6 +29,15 @@ layout(set = 0, binding = 0, std140) uniform Frame {
 	float response_sigma; // temporal-variance response threshold (0 = off)
 	float response_min_frames; // history length floor when responding to change
 	int jitter; // 1 = jitter probe positions per frame (0 for debugging)
+	mat4 view_to_world; // camera transform
+	int light_count;
+	int cache_mask; // radiance cache entries - 1 (power of two)
+	int rt_enabled; // world tracer available and scene present
+	int cache_mature_frames; // cached radiance is returned instead of a fresh sample once this old
+	float cache_min_cell; // radiance cache cell size at distance 0 (m)
+	float cache_cell_scale; // cell size grows with distance * scale
+	float cache_max_frames; // temporal accumulation cap of cache entries
+	float pad3;
 }
 fr;
 
@@ -63,6 +72,24 @@ uint hash_u(uint x) {
 
 float hash_f(uint x) {
 	return float(hash_u(x) >> 8) * (1.0 / 16777216.0);
+}
+
+// Per-probe ray i (cosine distributed around n, Hammersley + per-probe/frame rotation).
+// Shared by the screen trace and the world tracer so both see the same ray.
+vec3 probe_ray_dir(uint probe_index, uint lane, vec3 n) {
+	vec3 t = normalize(abs(n.y) < 0.99 ? cross(n, vec3(0, 1, 0)) : cross(n, vec3(1, 0, 0)));
+	vec3 b = cross(n, t);
+	uint seed = probe_index * 7177u + uint(fr.frame) * 31337u;
+	uint bits = bitfieldReverse(lane);
+	vec2 h = vec2((float(lane) + 0.5) / float(fr.rays), float(bits) * 2.3283064365386963e-10);
+	vec2 u = fract(h + vec2(hash_f(seed), hash_f(seed + 1u)));
+	float r = sqrt(u.x);
+	float phi = 2.0 * PI * u.y;
+	return normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(0.0, 1.0 - u.x)));
+}
+
+vec3 probe_ray_origin(Probe pr) {
+	return pr.pos.xyz + pr.normal.xyz * max(-pr.pos.z, fr.near) * 0.002;
 }
 
 // Similarity of a sample point to a reference surface (plane + normal).

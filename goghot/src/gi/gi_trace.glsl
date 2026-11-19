@@ -1,22 +1,14 @@
-// Trace: one workgroup per probe, one cosine-distributed ray per thread.
-// Screen trace through the HZB; a hit takes its radiance from the previous frame's lit color
-// (reprojected), which also gives multi-bounce and emissive GI through frame feedback.
-// Rays that leave the screen (or run out of steps) take the sky radiance. There is no world-space
-// tracer yet (phase 3), so off-screen occluders are invisible: this is where screen-only GI leaks.
-// Output: mean radiance over the cosine-weighted hemisphere = irradiance / PI at the probe.
+// Screen trace: one workgroup per probe, one cosine-distributed ray per thread.
+// HZB march; a hit takes its radiance from the previous frame lit color (reprojected), which also
+// gives multi-bounce and emissive GI through frame feedback. Per-ray result in rays[]:
+//   w = 1: resolved (screen hit), w = 0: unresolved (left the screen / no data) -> world tracer,
+//   which falls back to the sky. Without the world tracer the gather pass uses the sky directly.
 layout(local_size_x = 32) in;
 layout(set = 0, binding = 1) uniform sampler2D hzb; // mip chain, closest depth
 layout(set = 0, binding = 2) uniform sampler2D prev_color; // previous frame HDR, linear sampler
 layout(set = 0, binding = 3, std430) restrict readonly buffer Probes { Probe probes[]; };
 layout(set = 0, binding = 4, std430) restrict readonly buffer Counter { uint counter[4]; };
-layout(set = 0, binding = 5, std430) restrict writeonly buffer Radiance { vec4 radiance[]; };
-
-shared vec4 acc[32];
-
-vec2 hammersley(uint i, uint n) {
-	uint b = bitfieldReverse(i);
-	return vec2((float(i) + 0.5) / float(n), float(b) * 2.3283064365386963e-10);
-}
+layout(set = 0, binding = 5, std430) restrict writeonly buffer Rays { vec4 rays[]; };
 
 // Screen-space position: xy in pixels, z = NDC depth (reverse Z). Linear in screen space.
 vec3 to_screen(vec3 view_pos) {
@@ -94,48 +86,24 @@ void main() {
 	uint lane = gl_LocalInvocationID.x;
 	uint total = uint(fr.probe_grid.x * fr.probe_grid.y) + min(counter[0], uint(fr.max_adaptive));
 	if (probe_index >= total) {
-		return; // whole workgroup exits together
+		return;
 	}
 	Probe pr = probes[probe_index];
-	vec4 result = vec4(0.0);
+	vec4 result = vec4(0.0, 0.0, 0.0, -1.0); // w < 0: no ray (invalid probe / lane >= rays)
 	if (pr.pos.w > 0.5 && lane < uint(fr.rays)) {
-		vec3 n = pr.normal.xyz;
-		vec3 t = normalize(abs(n.y) < 0.99 ? cross(n, vec3(0, 1, 0)) : cross(n, vec3(1, 0, 0)));
-		vec3 b = cross(n, t);
-		uint seed = probe_index * 7177u + uint(fr.frame) * 31337u;
-		vec2 u = fract(hammersley(lane, uint(fr.rays)) + vec2(hash_f(seed), hash_f(seed + 1u)));
-		float r = sqrt(u.x);
-		float phi = 2.0 * PI * u.y;
-		vec3 dir = normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(0.0, 1.0 - u.x)));
-
-		vec3 origin = pr.pos.xyz + n * max(-pr.pos.z, fr.near) * 0.002;
-		vec3 radiance_s = fr.sky.rgb;
+		vec3 dir = probe_ray_dir(probe_index, lane, pr.normal.xyz);
 		vec2 hit_px;
-		if (trace_screen(origin, dir, hit_px)) {
-			// Reproject the hit point into the previous frame.
+		result = vec4(0.0); // unresolved
+		if (trace_screen(probe_ray_origin(pr), dir, hit_px)) {
 			vec2 huv = hit_px / vec2(fr.size);
 			float hd = texelFetch(hzb, ivec2(hit_px), 0).r;
 			vec3 hv = view_from_depth(huv, hd);
 			vec4 pc4 = fr.prev_proj * (fr.cur_to_prev_view * vec4(hv, 1.0));
 			vec2 puv = (pc4.xy / pc4.w) * 0.5 + 0.5;
 			if (fr.has_history != 0 && pc4.w > 0.0 && all(greaterThanEqual(puv, vec2(0.0))) && all(lessThanEqual(puv, vec2(1.0)))) {
-				radiance_s = textureLod(prev_color, puv, 0.0).rgb;
-			} else {
-				radiance_s = vec3(0.0); // hit something we have no lighting for yet
+				result = vec4(textureLod(prev_color, puv, 0.0).rgb, 1.0);
 			}
 		}
-		result = vec4(radiance_s, 1.0);
 	}
-	acc[lane] = result;
-	barrier();
-	for (uint s = 16u; s > 0u; s >>= 1u) {
-		if (lane < s) {
-			acc[lane] += acc[lane + s];
-		}
-		barrier();
-	}
-	if (lane == 0u) {
-		vec4 a = acc[0];
-		radiance[probe_index] = a.w > 0.0 ? vec4(a.rgb / a.w, 1.0) : vec4(0.0);
-	}
+	rays[probe_index * 32u + lane] = result;
 }

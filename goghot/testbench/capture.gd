@@ -4,7 +4,7 @@
 #   godot --path goghot/testbench --rendering-driver vulkan --resolution 960x540 \
 #         --script res://capture.gd -- <scene.json> <out_dir>
 #         [gi_mode] [exposure]
-# gi_mode: baseline (flat ambient, default) | inject_identity | inject_red (engine patch 1 checks) | screen_probe (phase 2)
+# gi_mode: baseline (flat ambient, default) | inject_identity | inject_red (engine patch 1 checks) | screen_probe (phase 2) | rt (phase 3)
 # exposure: fixed (default, exposure 1, comparable to Cycles) | auto (histogram auto exposure, GDScript proto) | auto_cpp (GDExtension)
 #
 # Scene JSON is shared with tools/blender_ref.py so Godot and Cycles build the same scene.
@@ -47,6 +47,7 @@ func _build(root: Node3D) -> void:
 		mat.roughness = m.get("roughness", 1.0)
 		mat.metallic = m.get("metallic", 0.0)
 		mat.metallic_specular = 0.0 if m.get("specular", 0.0) == 0.0 else 0.5
+		mat.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT # Cycles Principled diffuse is Lambertian (Godot default is Burley)
 		if m.has("emission"):
 			mat.emission_enabled = true
 			mat.emission = _col(m.emission)
@@ -113,12 +114,19 @@ func _build(root: Node3D) -> void:
 		# Engine patch 1 validation (see gi_inject_test.gd).
 		inject_effect = load("res://gi_inject_test.gd").new()
 		effects.append(inject_effect)
-	elif gi_mode == "screen_probe":
-		gi_effect = ClassDB.instantiate("GoghotScreenProbeGI") # phase 2, GDExtension
+	elif gi_mode == "screen_probe" or gi_mode == "rt":
+		# screen_probe: phase 2 (screen trace + sky). rt: phase 3 (+ hardware RT world tracer and
+		# radiance cache, scene fed by a GoghotGIScene node).
+		gi_effect = ClassDB.instantiate("GoghotScreenProbeGI")
+		gi_effect.world_tracing = gi_mode == "rt"
 		for k in gi_params:
 			gi_effect.set(k, gi_params[k])
 		effects.append(gi_effect)
 		effects.append(gi_effect.create_color_capture())
+		if gi_mode == "rt":
+			var scene_node: Node = ClassDB.instantiate("GoghotGIScene")
+			scene_node.gi = gi_effect
+			root.add_child(scene_node)
 	elif gi_mode != "baseline":
 		push_error("unknown gi mode " + gi_mode)
 	if exposure_mode == "auto" or exposure_mode == "auto_cpp":

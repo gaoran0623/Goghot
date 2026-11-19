@@ -9,15 +9,22 @@
 #include <godot_cpp/variant/projection.hpp>
 #include <godot_cpp/variant/transform3d.hpp>
 
+#include "gi_scene.h"
+#include "world_tracer.h"
+
+#include <memory>
+#include <mutex>
+
 namespace goghot {
 
 class GoghotGIColorCapture;
 
-// Screen-space probe final gather (phase 2): PRE_OPAQUE CompositorEffect with
-// provides_indirect_light (engine patch 1). Writes irradiance / PI into rbgi/ambient.
-//   HZB -> uniform probes (1 per spacing^2 tile, jittered) + adaptive probes on depth/normal
-//   discontinuities -> screen trace (rays cosine-distributed, previous frame color at hits, sky on
-//   miss) -> 3x3 bilateral probe filter -> per-pixel interpolation -> temporal accumulation.
+// Screen-space probe final gather: PRE_OPAQUE CompositorEffect with provides_indirect_light
+// (engine patch 1). Writes irradiance / PI into rbgi/ambient.
+//   HZB -> uniform probes (1 per spacing^2 tile) + adaptive probes on depth/normal discontinuities
+//   -> screen trace (cosine rays, previous frame color at hits) -> world tracer for rays that left
+//   the screen (tier A hardware RT + radiance cache; needs a GoghotGIScene feeding the scene, sky
+//   otherwise) -> gather -> 3x3 bilateral probe filter -> per-pixel interpolation -> temporal.
 // Needs a GoghotGIColorCapture (POST_SKY) in the same compositor to supply previous-frame color;
 // create it with create_color_capture(). Single view, Forward+ only.
 class GoghotScreenProbeGI : public godot::CompositorEffect {
@@ -30,6 +37,7 @@ class GoghotScreenProbeGI : public godot::CompositorEffect {
 		PASS_PROBE_PLACE,
 		PASS_PROBE_ADAPTIVE,
 		PASS_TRACE,
+		PASS_GATHER,
 		PASS_FILTER,
 		PASS_RESOLVE,
 		PASS_TEMPORAL,
@@ -38,7 +46,7 @@ class GoghotScreenProbeGI : public godot::CompositorEffect {
 	};
 
 	// Settings (scene independent defaults).
-	int probe_spacing = 32;
+	int probe_spacing = 16; // default changed from the 32 px spec by the user (2026-11-19, phase 3 data)
 	int rays_per_probe = 32;
 	float thickness = 0.05f;
 	float max_distance = 100.0f;
@@ -46,12 +54,17 @@ class GoghotScreenProbeGI : public godot::CompositorEffect {
 	float normal_power = 8.0f;
 	int temporal_max_frames = 48;
 	int max_steps = 64;
-	float response_sigma = 3.0f;
+	float response_sigma = 4.0f; // per-channel max deviation; 3 triggers on noise in colored light
 	int response_min_frames = 8;
 	bool jitter_probes = false; // measured: jitter adds flicker and does not improve accuracy
 	godot::Color sky_color = godot::Color(0, 0, 0);
 	float sky_energy = 1.0f;
 	int debug_mode = 0;
+	bool world_tracing = true;
+	float cache_min_cell = 0.05f;
+	float cache_cell_scale = 0.02f;
+	int cache_max_frames = 16; // measured: 32 converges multi-bounce too slowly, 8 flickers more
+	int cache_mature_frames = 8;
 
 	// GPU state.
 	godot::RenderingDevice *rd = nullptr;
@@ -66,7 +79,7 @@ class GoghotScreenProbeGI : public godot::CompositorEffect {
 	int hzb_levels = 0;
 	godot::RID hzb;
 	godot::Vector<godot::RID> hzb_mips;
-	godot::RID probes, counter, adaptive_map, radiance, filtered;
+	godot::RID probes, counter, adaptive_map, rays, radiance, filtered;
 	godot::RID resolved;
 	godot::RID history[2], aux[2], moments[2];
 	godot::RID prev_color;
@@ -79,6 +92,12 @@ class GoghotScreenProbeGI : public godot::CompositorEffect {
 	bool prev_color_valid = false;
 	godot::Projection prev_proj;
 	godot::Transform3D prev_cam;
+
+	// World tracer (render thread) and the scene snapshot handed over from the main thread.
+	GIWorldTracer world;
+	std::mutex scene_mutex;
+	std::shared_ptr<const GISceneSnapshot> pending_scene;
+	std::shared_ptr<const GISceneSnapshot> scene;
 
 	void _create_pipelines();
 	void _free_all();
@@ -95,6 +114,8 @@ protected:
 public:
 	void _render_callback(int32_t p_effect_callback_type, godot::RenderData *p_render_data) override;
 	godot::Ref<GoghotGIColorCapture> create_color_capture();
+	void set_scene_snapshot(std::shared_ptr<const GISceneSnapshot> p_scene); // any thread
+	bool is_world_tracer_supported() const { return world.is_ready(); }
 	void reset_history();
 
 #define GOGHOT_PROP(m_type, m_name)            \
@@ -114,6 +135,11 @@ public:
 	GOGHOT_PROP(godot::Color, sky_color)
 	GOGHOT_PROP(float, sky_energy)
 	GOGHOT_PROP(int, debug_mode)
+	GOGHOT_PROP(bool, world_tracing)
+	GOGHOT_PROP(float, cache_min_cell)
+	GOGHOT_PROP(float, cache_cell_scale)
+	GOGHOT_PROP(int, cache_max_frames)
+	GOGHOT_PROP(int, cache_mature_frames)
 #undef GOGHOT_PROP
 
 	GoghotScreenProbeGI();

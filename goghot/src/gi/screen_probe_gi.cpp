@@ -15,6 +15,7 @@
 #include "gi/gi_common.glsl.gen.h"
 #include "gi/gi_copy.glsl.gen.h"
 #include "gi/gi_filter.glsl.gen.h"
+#include "gi/gi_gather.glsl.gen.h"
 #include "gi/gi_hzb_copy.glsl.gen.h"
 #include "gi/gi_hzb_down.glsl.gen.h"
 #include "gi/gi_probe_adaptive.glsl.gen.h"
@@ -31,7 +32,7 @@ using RD = RenderingDevice;
 
 namespace {
 
-// std140 layout of the Frame UBO in gi_common.glsl (368 bytes).
+// std140 layout of the Frame UBO in gi_common.glsl (464 bytes).
 struct FrameUBO {
 	float proj[16];
 	float inv_proj[16];
@@ -59,8 +60,17 @@ struct FrameUBO {
 	float response_sigma;
 	float response_min_frames;
 	int32_t jitter;
+	float view_to_world[16];
+	int32_t light_count;
+	int32_t cache_mask;
+	int32_t rt_enabled;
+	int32_t cache_mature_frames;
+	float cache_min_cell;
+	float cache_cell_scale;
+	float cache_max_frames;
+	float pad3;
 };
-static_assert(sizeof(FrameUBO) == 368, "Frame UBO layout");
+static_assert(sizeof(FrameUBO) == 464, "Frame UBO layout");
 
 void store(const Projection &p_m, float *r_out) {
 	for (int c = 0; c < 4; c++) {
@@ -104,11 +114,11 @@ void GoghotScreenProbeGI::_create_pipelines() {
 		return;
 	}
 	const char *bodies[PASS_MAX] = { GI_HZB_COPY_GLSL, GI_HZB_DOWN_GLSL, GI_PROBE_PLACE_GLSL, GI_PROBE_ADAPTIVE_GLSL,
-		GI_TRACE_GLSL, GI_FILTER_GLSL, GI_RESOLVE_GLSL, GI_TEMPORAL_GLSL, GI_COPY_GLSL };
+		GI_TRACE_GLSL, GI_GATHER_GLSL, GI_FILTER_GLSL, GI_RESOLVE_GLSL, GI_TEMPORAL_GLSL, GI_COPY_GLSL };
 	for (int i = 0; i < PASS_MAX; i++) {
 		Ref<RDShaderSource> src;
 		src.instantiate();
-		src->set_stage_source(RD::SHADER_STAGE_COMPUTE, String(GI_COMMON_GLSL) + String(bodies[i]));
+		src->set_stage_source(RD::SHADER_STAGE_COMPUTE, String("#version 450\n") + String(GI_COMMON_GLSL) + String(bodies[i]));
 		Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(src);
 		String err = spirv->get_stage_compile_error(RD::SHADER_STAGE_COMPUTE);
 		if (!err.is_empty()) {
@@ -127,6 +137,9 @@ void GoghotScreenProbeGI::_create_pipelines() {
 	ss->set_mag_filter(RD::SAMPLER_FILTER_LINEAR);
 	linear_sampler = rd->sampler_create(ss);
 	frame_ubo = rd->uniform_buffer_create(sizeof(FrameUBO));
+	if (!world.init(rd, String(), String())) {
+		UtilityFunctions::print_verbose("Goghot: hardware ray tracing unavailable, world tracer disabled (screen + sky only).");
+	}
 	ready = true;
 }
 
@@ -151,7 +164,7 @@ void GoghotScreenProbeGI::_free_sized() {
 		rd->free_rid(m);
 	}
 	hzb_mips.clear();
-	RID *rids[] = { &hzb, &probes, &counter, &adaptive_map, &radiance, &filtered, &resolved, &history[0], &history[1], &aux[0], &aux[1], &moments[0], &moments[1], &prev_color };
+	RID *rids[] = { &hzb, &probes, &counter, &adaptive_map, &rays, &radiance, &filtered, &resolved, &history[0], &history[1], &aux[0], &aux[1], &moments[0], &moments[1], &prev_color };
 	for (RID *r : rids) {
 		if (r->is_valid()) {
 			rd->free_rid(*r);
@@ -168,6 +181,7 @@ void GoghotScreenProbeGI::_free_all() {
 		return;
 	}
 	_free_sized();
+	world.free();
 	for (int i = 0; i < PASS_MAX; i++) {
 		if (shaders[i].is_valid()) {
 			rd->free_rid(shaders[i]);
@@ -213,6 +227,7 @@ void GoghotScreenProbeGI::_ensure_size(const Vector2i &p_size) {
 	}
 	int total_probes = pg.x * pg.y + max_adaptive;
 	probes = rd->storage_buffer_create(total_probes * 32);
+	rays = rd->storage_buffer_create(total_probes * 32 * 16);
 	radiance = rd->storage_buffer_create(total_probes * 16);
 	filtered = rd->storage_buffer_create(total_probes * 16);
 	counter = rd->storage_buffer_create(16);
@@ -221,7 +236,7 @@ void GoghotScreenProbeGI::_ensure_size(const Vector2i &p_size) {
 	for (int i = 0; i < 2; i++) {
 		history[i] = _tex(RD::DATA_FORMAT_R16G16B16A16_SFLOAT, size, 1, storage_sample);
 		aux[i] = _tex(RD::DATA_FORMAT_R32G32B32A32_SFLOAT, size, 1, storage_sample);
-		moments[i] = _tex(RD::DATA_FORMAT_R32G32_SFLOAT, size, 1, storage_sample);
+		moments[i] = _tex(RD::DATA_FORMAT_R32G32B32A32_SFLOAT, size, 1, storage_sample);
 	}
 	prev_color = _tex(RD::DATA_FORMAT_R16G16B16A16_SFLOAT, size, 1, storage_sample);
 	has_history = false;
@@ -298,6 +313,22 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 	f.response_sigma = response_sigma;
 	f.response_min_frames = float(MAX(response_min_frames, 1));
 	f.jitter = jitter_probes ? 1 : 0;
+	{
+		std::lock_guard<std::mutex> lock(scene_mutex);
+		if (pending_scene) {
+			scene = pending_scene;
+			pending_scene.reset();
+		}
+	}
+	const bool world_active = world_tracing && world.is_ready() && scene && world.update_scene(*scene);
+	store(cam, f.view_to_world);
+	f.light_count = world_active ? int32_t(world.light_count()) : 0;
+	f.cache_mask = int32_t(GIWorldTracer::CACHE_ENTRIES - 1);
+	f.rt_enabled = world_active ? 1 : 0;
+	f.cache_mature_frames = cache_mature_frames;
+	f.cache_min_cell = cache_min_cell;
+	f.cache_cell_scale = cache_cell_scale;
+	f.cache_max_frames = float(MAX(cache_max_frames, 1));
 	PackedByteArray ubo;
 	ubo.resize(sizeof(f));
 	memcpy(ubo.ptrw(), &f, sizeof(f));
@@ -347,8 +378,20 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 		u.push_back(uni(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 2, linear_sampler, prev_color));
 		u.push_back(buf(3, probes));
 		u.push_back(buf(4, counter));
-		u.push_back(buf(5, radiance));
+		u.push_back(buf(5, rays));
 		_dispatch(cl, PASS_TRACE, u, total_probes, 1);
+	}
+	rd->compute_list_end();
+	if (world_active) {
+		world.trace(frame_ubo, probes, rays, counter, uint32_t(total_probes) * 32u);
+	}
+	const int64_t cl2 = rd->compute_list_begin();
+	{ // Gather rays -> probe radiance
+		TypedArray<RDUniform> u;
+		u.push_back(buf(1, counter));
+		u.push_back(buf(2, rays));
+		u.push_back(buf(3, radiance));
+		_dispatch(cl2, PASS_GATHER, u, (total_probes + 63) / 64, 1);
 	}
 	{ // Probe filter
 		TypedArray<RDUniform> u;
@@ -356,7 +399,7 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 		u.push_back(buf(2, counter));
 		u.push_back(buf(3, radiance));
 		u.push_back(buf(4, filtered));
-		_dispatch(cl, PASS_FILTER, u, (total_probes + 63) / 64, 1);
+		_dispatch(cl2, PASS_FILTER, u, (total_probes + 63) / 64, 1);
 	}
 	{ // Resolve
 		TypedArray<RDUniform> u;
@@ -366,7 +409,7 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 		u.push_back(buf(4, filtered));
 		u.push_back(buf(5, adaptive_map));
 		u.push_back(img(6, resolved));
-		_dispatch(cl, PASS_RESOLVE, u, groups8.x, groups8.y);
+		_dispatch(cl2, PASS_RESOLVE, u, groups8.x, groups8.y);
 	}
 	{ // Temporal + output
 		TypedArray<RDUniform> u;
@@ -381,9 +424,12 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 		u.push_back(img(9, reflection));
 		u.push_back(uni(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 10, nearest_sampler, moments[ping ^ 1]));
 		u.push_back(img(11, moments[ping]));
-		_dispatch(cl, PASS_TEMPORAL, u, groups8.x, groups8.y);
+		_dispatch(cl2, PASS_TEMPORAL, u, groups8.x, groups8.y);
 	}
 	rd->compute_list_end();
+	if (world_active) {
+		world.resolve_cache(frame_ubo);
+	}
 	rd->capture_timestamp("goghot_gi_end");
 
 	prev_proj = proj;
@@ -413,6 +459,11 @@ Ref<GoghotGIColorCapture> GoghotScreenProbeGI::create_color_capture() {
 	c.instantiate();
 	c->set_gi(Ref<GoghotScreenProbeGI>(this));
 	return c;
+}
+
+void GoghotScreenProbeGI::set_scene_snapshot(std::shared_ptr<const GISceneSnapshot> p_scene) {
+	std::lock_guard<std::mutex> lock(scene_mutex);
+	pending_scene = std::move(p_scene);
 }
 
 void GoghotScreenProbeGI::reset_history() {
@@ -456,6 +507,12 @@ void GoghotScreenProbeGI::_bind_methods() {
 	GOGHOT_BIND(Variant::COLOR, sky_color, PROPERTY_HINT_NONE, "")
 	GOGHOT_BIND(Variant::FLOAT, sky_energy, PROPERTY_HINT_RANGE, "0,16,0.01")
 	GOGHOT_BIND(Variant::INT, debug_mode, PROPERTY_HINT_ENUM, "Off,No Temporal,No Spatial Filter")
+	GOGHOT_BIND(Variant::BOOL, world_tracing, PROPERTY_HINT_NONE, "")
+	GOGHOT_BIND(Variant::FLOAT, cache_min_cell, PROPERTY_HINT_RANGE, "0.005,1,0.005,suffix:m")
+	GOGHOT_BIND(Variant::FLOAT, cache_cell_scale, PROPERTY_HINT_RANGE, "0.001,0.2,0.001")
+	GOGHOT_BIND(Variant::INT, cache_max_frames, PROPERTY_HINT_RANGE, "1,256,1")
+	GOGHOT_BIND(Variant::INT, cache_mature_frames, PROPERTY_HINT_RANGE, "1,256,1")
+	ClassDB::bind_method(D_METHOD("is_world_tracer_supported"), &GoghotScreenProbeGI::is_world_tracer_supported);
 #undef GOGHOT_BIND
 }
 

@@ -21,8 +21,8 @@ layout(rgba16f, set = 0, binding = 6) uniform restrict writeonly image2D history
 layout(rgba32f, set = 0, binding = 7) uniform restrict writeonly image2D aux_cur;
 layout(rgba16f, set = 0, binding = 8) uniform restrict writeonly image2D ambient_out;
 layout(rgba16f, set = 0, binding = 9) uniform restrict writeonly image2D reflection_out;
-layout(set = 0, binding = 10) uniform sampler2D moments_prev; // fast EMA: x = luminance 2nd moment, y = luminance
-layout(rg32f, set = 0, binding = 11) uniform restrict writeonly image2D moments_cur;
+layout(set = 0, binding = 10) uniform sampler2D moments_prev; // fast EMA: rgb = color, a = luminance 2nd moment
+layout(rgba32f, set = 0, binding = 11) uniform restrict writeonly image2D moments_cur;
 
 const float FAST_FRAMES = 4.0;
 
@@ -51,7 +51,7 @@ void main() {
 	float cur_l = lum(cur.rgb);
 
 	vec4 result = vec4(cur.rgb, cur.w > 0.0 ? 1.0 : 0.0);
-	vec2 mom_out = vec2(cur_l * cur_l, cur_l);
+	vec4 mom_out = vec4(cur.rgb, cur_l * cur_l);
 	if (fr.has_history != 0 && fr.debug_mode != 1) {
 		vec4 pv = fr.cur_to_prev_view * vec4(p, 1.0);
 		vec4 pc4 = fr.prev_proj * pv;
@@ -60,7 +60,7 @@ void main() {
 			ivec2 ppix = ivec2(puv * vec2(fr.size));
 			vec4 aux = texelFetch(aux_prev, ppix, 0);
 			vec4 hist = texelFetch(history_prev, ppix, 0);
-			vec2 mom = texelFetch(moments_prev, ppix, 0).xy;
+			vec4 mom = texelFetch(moments_prev, ppix, 0);
 			vec3 n_prev_expected = normalize(mat3(fr.cur_to_prev_view) * n);
 			float expected_lin = -pv.z;
 			bool ok = aux.w > 0.0 && hist.a > 0.0 &&
@@ -69,22 +69,27 @@ void main() {
 			if (ok && cur.w > 0.0) {
 				float count = min(hist.a + 1.0, fr.temporal_max_frames);
 				float fa = 1.0 / min(count, FAST_FRAMES);
-				float fast = mix(mom.y, cur_l, fa);
-				float fast_m2 = mix(mom.x, cur_l * cur_l, fa);
+				vec3 fast = mix(mom.rgb, cur.rgb, fa);
+				float fast_m2 = mix(mom.a, cur_l * cur_l, fa);
+				float fast_l = lum(fast);
 				float slow_l = lum(hist.rgb);
 				if (fr.response_sigma > 0.0 && count > fr.response_min_frames) {
-					float sigma = sqrt(max(fast_m2 - fast * fast, 0.0));
+					float sigma = sqrt(max(fast_m2 - fast_l * fast_l, 0.0));
 					// Std of an EMA with alpha = 1/F over iid samples: sigma * sqrt(alpha / (2 - alpha)).
 					float a = 1.0 / FAST_FRAMES;
 					float sigma_fast = sigma * sqrt(a / (2.0 - a));
-					float dev = abs(fast - slow_l) / (sigma_fast + 0.01 * slow_l + 1e-5);
+					// Per channel (a hue shift at constant luminance, e.g. a sunset sky, must be caught
+					// too), with the luminance noise scaled to each channel.
+					vec3 sig_c = sigma_fast * hist.rgb / max(slow_l, 1e-5) + 0.01 * hist.rgb + 1e-5;
+					vec3 dev3 = abs(fast - hist.rgb) / sig_c;
+					float dev = max(dev3.r, max(dev3.g, dev3.b));
 					if (dev > fr.response_sigma) {
 						float r = fr.response_sigma / dev;
 						count = max(fr.response_min_frames, count * r * r);
 					}
 				}
 				result = vec4(mix(hist.rgb, cur.rgb, 1.0 / count), count);
-				mom_out = vec2(fast_m2, fast);
+				mom_out = vec4(fast, fast_m2);
 			} else if (ok) {
 				result = hist; // no probe data this frame: keep history
 				mom_out = mom;
@@ -93,6 +98,6 @@ void main() {
 	}
 	imageStore(history_cur, pix, result);
 	imageStore(aux_cur, pix, vec4(n, -p.z));
-	imageStore(moments_cur, pix, vec4(mom_out, 0.0, 0.0));
+	imageStore(moments_cur, pix, mom_out);
 	imageStore(ambient_out, pix, vec4(result.rgb, 1.0));
 }

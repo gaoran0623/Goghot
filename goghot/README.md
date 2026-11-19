@@ -4,7 +4,7 @@ Goghot real-time GI. Engine-side changes stay minimal (see `../CLAUDE.md`); ever
 
 | path | what |
 |---|---|
-| `src/` | GDExtension source: `exposure/` histogram auto exposure, `gi/` screen probe GI (`GoghotScreenProbeGI` + `GoghotGIColorCapture`). GLSL in `src/*/*.glsl`, embedded at build time |
+| `src/` | GDExtension source: `exposure/` histogram auto exposure, `gi/` screen probe GI (`GoghotScreenProbeGI` + `GoghotGIColorCapture`), tier A world tracer + radiance cache (`world_tracer.*`), scene collection node (`GoghotGIScene`). GLSL in `src/*/*.glsl`, embedded at build time |
 | `api/` | `extension_api.json` + `gdextension_interface.json` dumped from **our patched engine**; re-dump when engine patches change |
 | `thirdparty/godot-cpp/` | godot-cpp submodule |
 | `testbench/addons/goghot/` | `.gdextension` + built DLL (bin/ is gitignored) |
@@ -22,7 +22,7 @@ python -m SCons platform=windows target=editor dev_build=yes compiledb=yes d3d12
 bin/godot.windows.editor.dev.x86_64.console.exe --path goghot/demos/rt_smoke --rendering-driver vulkan --script res://rt_smoke.gd -- rt_smoke.png
 python -m SCons -C goghot target=template_debug -j11
 bin/godot.windows.editor.dev.x86_64.console.exe --path goghot/testbench --headless --import   # first time: registers the extension
-python goghot/testbench/tools/run.py --godot bin/godot.windows.editor.dev.x86_64.console.exe --tag <name> [--gi baseline|inject_identity|inject_red|screen_probe] [--gi-params '{json}'] [--exposure fixed|auto|auto_cpp]
+python goghot/testbench/tools/run.py --godot bin/godot.windows.editor.dev.x86_64.console.exe --tag <name> [--gi baseline|inject_identity|inject_red|screen_probe|rt] [--gi-params '{json}'] [--exposure fixed|auto|auto_cpp]
 ```
 
 Clone with `git submodule update --init` for godot-cpp.
