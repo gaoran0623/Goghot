@@ -319,7 +319,7 @@ bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap) {
 	return true;
 }
 
-void GIWorldTracer::trace(const RID &p_frame_ubo, const RID &p_probes, const RID &p_rays, const RID &p_counter, uint32_t p_ray_count) {
+void GIWorldTracer::trace(const RID &p_frame_ubo, const RID &p_probes, const RID &p_rays, const RID &p_counter, const RID &p_fog_rays, uint32_t p_ray_count) {
 	TypedArray<RDUniform> us;
 	us.push_back(uni(RD::UNIFORM_TYPE_UNIFORM_BUFFER, 0, p_frame_ubo));
 	us.push_back(uni(RD::UNIFORM_TYPE_ACCELERATION_STRUCTURE, 1, tlas));
@@ -331,6 +331,7 @@ void GIWorldTracer::trace(const RID &p_frame_ubo, const RID &p_probes, const RID
 	us.push_back(uni(RD::UNIFORM_TYPE_STORAGE_BUFFER, 7, index_storage));
 	us.push_back(uni(RD::UNIFORM_TYPE_STORAGE_BUFFER, 8, light_buffer));
 	us.push_back(uni(RD::UNIFORM_TYPE_STORAGE_BUFFER, 9, cache));
+	us.push_back(uni(RD::UNIFORM_TYPE_STORAGE_BUFFER, 10, p_fog_rays));
 	RID uset = UniformSetCacheRD::get_cache(rt_shader, 0, us);
 	const int64_t list = rd->raytracing_list_begin();
 	rd->raytracing_list_bind_raytracing_pipeline(list, rt_pipeline);

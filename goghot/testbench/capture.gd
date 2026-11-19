@@ -93,6 +93,7 @@ func _build(root: Node3D) -> void:
 	# Baseline "no GI": flat, unoccluded ambient equal to the sky radiance. GI work replaces this.
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_energy = 1.0
+	env.ambient_light_sky_contribution = 0.0 # no Sky resource: otherwise fog ambient would read a black sky
 	env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
 	env.tonemap_mode = Environment.TONE_MAPPER_LINEAR
 	env.tonemap_exposure = 1.0

@@ -1,5 +1,5 @@
 {
-	"description": "Dusk: low orange sun behind a colonnade, homogeneous volumetric fog, dim sky. Tests fog GI / light shafts, low-angle sun, low exposure.",
+	"description": "Dusk: low orange sun behind a colonnade, homogeneous volumetric fog, dim sky. Tests fog GI / light shafts, low-angle sun, low exposure. Fog anisotropy is 0: Godot's anisotropic fog phase is ~25% brighter than Cycles (KNOWN_ISSUES), which would hide the GI signal.",
 	"sky": {
 		"color": [
 			0.06,
@@ -243,7 +243,7 @@
 			0.9,
 			0.9
 		],
-		"anisotropy": 0.5,
+		"anisotropy": 0.0,
 		"length": 60
 	},
 	"lights": [

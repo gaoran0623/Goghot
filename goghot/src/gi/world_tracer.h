@@ -25,7 +25,7 @@ public:
 	uint32_t light_count() const { return lights_used; }
 
 	// Traces rays[] entries with w == 0 (see gi_rt_raygen.glsl). p_ray_count = probes * 32.
-	void trace(const godot::RID &p_frame_ubo, const godot::RID &p_probes, const godot::RID &p_rays, const godot::RID &p_counter, uint32_t p_ray_count);
+	void trace(const godot::RID &p_frame_ubo, const godot::RID &p_probes, const godot::RID &p_rays, const godot::RID &p_counter, const godot::RID &p_fog_rays, uint32_t p_ray_count);
 	void resolve_cache(const godot::RID &p_frame_ubo);
 	void clear_cache();
 

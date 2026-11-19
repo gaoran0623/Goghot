@@ -23,6 +23,7 @@ struct Light {
 	vec4 params; // x: attenuation exponent, y: casts shadow
 };
 layout(set = 0, binding = 8, std430) restrict readonly buffer Lights { Light lights[]; };
+layout(set = 0, binding = 10, std430) restrict writeonly buffer FogRays { vec4 fog_rays[]; };
 
 struct HitPayload {
 	vec3 normal; // world, shading normal

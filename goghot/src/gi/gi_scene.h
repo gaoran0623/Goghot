@@ -56,6 +56,8 @@ struct GISceneSnapshot {
 	uint64_t mesh_set_hash = 0; // changes when the set of meshes changes (GPU buffers / BLAS rebuild)
 	std::vector<GIInstance> instances;
 	std::vector<GILight> lights;
+	bool fog_enabled = false; // Environment volumetric fog of the active camera / world
+	float fog_length = 0.0f;
 };
 
 // Collects meshes, materials and lights of the scene tree for the world tracer every frame and

@@ -38,6 +38,13 @@ layout(set = 0, binding = 0, std140) uniform Frame {
 	float cache_cell_scale; // cell size grows with distance * scale
 	float cache_max_frames; // temporal accumulation cap of cache entries
 	float pad3;
+	ivec4 fog_grid; // x: voxels per axis, y: rays per voxel, z: enabled, w: probe ray count (fog rays follow)
+	vec4 fog_origin; // xyz: world position of voxel (0,0,0) min corner, w: voxel size
+	ivec4 fog_shift; // xyz: voxel offset of this volume in the previous one
+	float fog_max_frames;
+	float pad4;
+	float pad5;
+	float pad6;
 }
 fr;
 

@@ -263405,6 +263405,29 @@
 					]
 				},
 				{
+					"name": "environment_set_volumetric_fog_gi_volume",
+					"is_const": false,
+					"is_vararg": false,
+					"is_static": false,
+					"is_virtual": false,
+					"hash": 1148663527,
+					"arguments": [
+						{
+							"name": "env",
+							"type": "RID"
+						},
+						{
+							"name": "rd_texture",
+							"type": "RID"
+						},
+						{
+							"name": "half_extent",
+							"type": "float",
+							"meta": "float"
+						}
+					]
+				},
+				{
 					"name": "environment_bake_panorama",
 					"is_const": false,
 					"is_vararg": false,

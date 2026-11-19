@@ -3,6 +3,10 @@
 #include "screen_probe_gi.h"
 
 #include <godot_cpp/classes/base_material3d.hpp>
+#include <godot_cpp/classes/camera3d.hpp>
+#include <godot_cpp/classes/environment.hpp>
+#include <godot_cpp/classes/viewport.hpp>
+#include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/classes/directional_light3d.hpp>
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/mesh.hpp>
@@ -142,6 +146,19 @@ void GoghotGIScene::update_now() {
 		h = (h ^ m->id) * 1099511628211ull;
 	}
 	snap->mesh_set_hash = h;
+	Ref<Environment> env;
+	if (Viewport *vp = get_viewport()) {
+		if (Camera3D *cam = vp->get_camera_3d()) {
+			env = cam->get_environment();
+		}
+		if (env.is_null() && vp->find_world_3d().is_valid()) {
+			env = vp->find_world_3d()->get_environment();
+		}
+	}
+	if (env.is_valid() && env->is_volumetric_fog_enabled()) {
+		snap->fog_enabled = true;
+		snap->fog_length = env->get_volumetric_fog_length();
+	}
 	gi->set_scene_snapshot(snap);
 }
 

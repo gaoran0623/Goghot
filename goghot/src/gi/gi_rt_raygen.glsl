@@ -64,8 +64,46 @@ vec3 cosine_dir(vec3 n, vec2 u) {
 	return normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(0.0, 1.0 - u.x)));
 }
 
+// Fog GI volume ray: uniform sphere direction from a jittered point in the voxel. Hits are shaded
+// with fresh direct light + cached indirect (no extra bounce ray); misses see the sky.
+void fog_ray(uint i) {
+	uint rpv = uint(max(fr.fog_grid.y, 1));
+	uint voxel = i / rpv;
+	uint n = uint(fr.fog_grid.x);
+	if (voxel >= n * n * n) {
+		return;
+	}
+	uvec3 v = uvec3(voxel % n, (voxel / n) % n, voxel / (n * n));
+	uint seed = i * 2654435761u + uint(fr.frame) * 40503u;
+	vec3 jitter = vec3(hash_f(seed), hash_f(seed + 1u), hash_f(seed + 2u));
+	vec3 origin = fr.fog_origin.xyz + (vec3(v) + jitter) * fr.fog_origin.w;
+	float z = hash_f(seed + 3u) * 2.0 - 1.0;
+	float phi = 2.0 * PI * hash_f(seed + 4u);
+	vec3 dir = vec3(sqrt(max(0.0, 1.0 - z * z)) * vec2(cos(phi), sin(phi)), z);
+	vec3 radiance = fr.sky.rgb;
+	if (trace_hit(origin, dir)) {
+		radiance = vec3(0.0);
+		if (hit.backface < 0.5) {
+			vec3 p = origin + dir * hit.t;
+			vec3 nrm = hit.normal;
+			vec3 albedo = hit.albedo;
+			vec3 emission = hit.emission;
+			vec4 c;
+			vec3 ind = cache_lookup(p, nrm, c) ? c.rgb : vec3(0.0);
+			radiance = emission + albedo * (direct_light(p, nrm) + ind);
+		}
+	}
+	fog_rays[i] = vec4(radiance, 1.0);
+}
+
 void main() {
 	uint ray_index = gl_LaunchIDEXT.x;
+	if (ray_index >= uint(fr.fog_grid.w)) {
+		if (fr.fog_grid.z != 0) {
+			fog_ray(ray_index - uint(fr.fog_grid.w));
+		}
+		return;
+	}
 	uint probe_index = ray_index / 32u;
 	uint lane = ray_index % 32u;
 	uint total = uint(fr.probe_grid.x * fr.probe_grid.y) + min(counter[0], uint(fr.max_adaptive));

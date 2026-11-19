@@ -41,6 +41,7 @@ class GoghotScreenProbeGI : public godot::CompositorEffect {
 		PASS_FILTER,
 		PASS_RESOLVE,
 		PASS_TEMPORAL,
+		PASS_FOG_ACCUMULATE,
 		PASS_COPY,
 		PASS_MAX
 	};
@@ -65,6 +66,10 @@ class GoghotScreenProbeGI : public godot::CompositorEffect {
 	float cache_cell_scale = 0.02f;
 	int cache_max_frames = 16; // measured: 32 converges multi-bounce too slowly, 8 flickers more
 	int cache_mature_frames = 8;
+	bool fog_gi = true; // feed volumetric fog (engine patch 3) when the environment has it enabled
+	int fog_resolution = 32;
+	int fog_rays_per_voxel = 4;
+	int fog_max_frames = 32;
 
 	// GPU state.
 	godot::RenderingDevice *rd = nullptr;
@@ -83,6 +88,14 @@ class GoghotScreenProbeGI : public godot::CompositorEffect {
 	godot::RID resolved;
 	godot::RID history[2], aux[2], moments[2];
 	godot::RID prev_color;
+	// Fog GI volume (world aligned, follows the camera in whole voxels).
+	godot::RID fog_rays, fog_volume, fog_history;
+	int fog_res_alloc = 0;
+	godot::Vector3i fog_center_cell;
+	bool fog_has_history = false;
+	godot::RID fog_env_bound;
+	float fog_extent_bound = 0.0f;
+	void _free_fog();
 	godot::Vector2i probe_grid, adaptive_grid;
 	int max_adaptive = 0;
 
@@ -104,7 +117,7 @@ class GoghotScreenProbeGI : public godot::CompositorEffect {
 	void _free_sized();
 	void _ensure_size(const godot::Vector2i &p_size);
 	godot::RID _tex(godot::RenderingDevice::DataFormat p_format, const godot::Vector2i &p_size, int p_mips, uint32_t p_usage);
-	void _dispatch(int64_t p_list, Pass p_pass, const godot::TypedArray<godot::RDUniform> &p_uniforms, uint32_t p_x, uint32_t p_y);
+	void _dispatch(int64_t p_list, Pass p_pass, const godot::TypedArray<godot::RDUniform> &p_uniforms, uint32_t p_x, uint32_t p_y, uint32_t p_z = 1);
 	void _capture_color(godot::RenderSceneBuffersRD *p_rb);
 
 protected:
@@ -140,6 +153,10 @@ public:
 	GOGHOT_PROP(float, cache_cell_scale)
 	GOGHOT_PROP(int, cache_max_frames)
 	GOGHOT_PROP(int, cache_mature_frames)
+	GOGHOT_PROP(bool, fog_gi)
+	GOGHOT_PROP(int, fog_resolution)
+	GOGHOT_PROP(int, fog_rays_per_voxel)
+	GOGHOT_PROP(int, fog_max_frames)
 #undef GOGHOT_PROP
 
 	GoghotScreenProbeGI();

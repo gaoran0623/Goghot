@@ -15,6 +15,7 @@
 #include "gi/gi_common.glsl.gen.h"
 #include "gi/gi_copy.glsl.gen.h"
 #include "gi/gi_filter.glsl.gen.h"
+#include "gi/gi_fog_accumulate.glsl.gen.h"
 #include "gi/gi_gather.glsl.gen.h"
 #include "gi/gi_hzb_copy.glsl.gen.h"
 #include "gi/gi_hzb_down.glsl.gen.h"
@@ -32,7 +33,7 @@ using RD = RenderingDevice;
 
 namespace {
 
-// std140 layout of the Frame UBO in gi_common.glsl (464 bytes).
+// std140 layout of the Frame UBO in gi_common.glsl (528 bytes).
 struct FrameUBO {
 	float proj[16];
 	float inv_proj[16];
@@ -69,8 +70,13 @@ struct FrameUBO {
 	float cache_cell_scale;
 	float cache_max_frames;
 	float pad3;
+	int32_t fog_grid[4];
+	float fog_origin[4];
+	int32_t fog_shift[4];
+	float fog_max_frames;
+	float pad4[3];
 };
-static_assert(sizeof(FrameUBO) == 464, "Frame UBO layout");
+static_assert(sizeof(FrameUBO) == 528, "Frame UBO layout");
 
 void store(const Projection &p_m, float *r_out) {
 	for (int c = 0; c < 4; c++) {
@@ -114,7 +120,7 @@ void GoghotScreenProbeGI::_create_pipelines() {
 		return;
 	}
 	const char *bodies[PASS_MAX] = { GI_HZB_COPY_GLSL, GI_HZB_DOWN_GLSL, GI_PROBE_PLACE_GLSL, GI_PROBE_ADAPTIVE_GLSL,
-		GI_TRACE_GLSL, GI_GATHER_GLSL, GI_FILTER_GLSL, GI_RESOLVE_GLSL, GI_TEMPORAL_GLSL, GI_COPY_GLSL };
+		GI_TRACE_GLSL, GI_GATHER_GLSL, GI_FILTER_GLSL, GI_RESOLVE_GLSL, GI_TEMPORAL_GLSL, GI_FOG_ACCUMULATE_GLSL, GI_COPY_GLSL };
 	for (int i = 0; i < PASS_MAX; i++) {
 		Ref<RDShaderSource> src;
 		src.instantiate();
@@ -176,11 +182,30 @@ void GoghotScreenProbeGI::_free_sized() {
 	prev_color_valid = false;
 }
 
+void GoghotScreenProbeGI::_free_fog() {
+	if (rd == nullptr) {
+		return;
+	}
+	if (fog_env_bound.is_valid()) {
+		RenderingServer::get_singleton()->environment_set_volumetric_fog_gi_volume(fog_env_bound, RID(), 0.0f);
+		fog_env_bound = RID();
+	}
+	for (RID *r : { &fog_rays, &fog_volume, &fog_history }) {
+		if (r->is_valid()) {
+			rd->free_rid(*r);
+		}
+		*r = RID();
+	}
+	fog_res_alloc = 0;
+	fog_has_history = false;
+}
+
 void GoghotScreenProbeGI::_free_all() {
 	if (rd == nullptr) {
 		return;
 	}
 	_free_sized();
+	_free_fog();
 	world.free();
 	for (int i = 0; i < PASS_MAX; i++) {
 		if (shaders[i].is_valid()) {
@@ -243,13 +268,13 @@ void GoghotScreenProbeGI::_ensure_size(const Vector2i &p_size) {
 	prev_color_valid = false;
 }
 
-void GoghotScreenProbeGI::_dispatch(int64_t p_list, Pass p_pass, const TypedArray<RDUniform> &p_uniforms, uint32_t p_x, uint32_t p_y) {
+void GoghotScreenProbeGI::_dispatch(int64_t p_list, Pass p_pass, const TypedArray<RDUniform> &p_uniforms, uint32_t p_x, uint32_t p_y, uint32_t p_z) {
 	TypedArray<RDUniform> us;
 	us.push_back(uni(RD::UNIFORM_TYPE_UNIFORM_BUFFER, 0, frame_ubo));
 	us.append_array(p_uniforms);
 	rd->compute_list_bind_compute_pipeline(p_list, pipelines[p_pass]);
 	rd->compute_list_bind_uniform_set(p_list, UniformSetCacheRD::get_cache(shaders[p_pass], 0, us), 0);
-	rd->compute_list_dispatch(p_list, MAX(p_x, 1u), MAX(p_y, 1u), 1);
+	rd->compute_list_dispatch(p_list, MAX(p_x, 1u), MAX(p_y, 1u), MAX(p_z, 1u));
 	rd->compute_list_add_barrier(p_list);
 }
 
@@ -282,6 +307,7 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 		prev_cam = cam;
 	}
 
+	const int total_probes = probe_grid.x * probe_grid.y + max_adaptive;
 	FrameUBO f = {};
 	store(proj, f.proj);
 	store(inv_proj, f.inv_proj);
@@ -329,6 +355,53 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 	f.cache_min_cell = cache_min_cell;
 	f.cache_cell_scale = cache_cell_scale;
 	f.cache_max_frames = float(MAX(cache_max_frames, 1));
+
+	// Fog GI volume: centered on the camera, snapped to whole voxels, half size = fog length.
+	const bool fog_active = world_active && fog_gi && scene->fog_enabled && scene->fog_length > 0.0f;
+	const int fog_n = CLAMP(fog_resolution, 8, 128) & ~1;
+	const int fog_rpv = CLAMP(fog_rays_per_voxel, 1, 64);
+	Vector3i fog_shift;
+	if (fog_active) {
+		if (fog_res_alloc != fog_n) {
+			_free_fog();
+			fog_rays = rd->storage_buffer_create(fog_n * fog_n * fog_n * fog_rpv * 16 + 16);
+			Ref<RDTextureFormat> tf;
+			tf.instantiate();
+			tf->set_texture_type(RD::TEXTURE_TYPE_3D);
+			tf->set_format(RD::DATA_FORMAT_R16G16B16A16_SFLOAT);
+			tf->set_width(fog_n);
+			tf->set_height(fog_n);
+			tf->set_depth(fog_n);
+			tf->set_usage_bits(RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT);
+			Ref<RDTextureView> tv;
+			tv.instantiate();
+			fog_volume = rd->texture_create(tf, tv);
+			fog_history = rd->texture_create(tf, tv);
+			rd->texture_clear(fog_volume, Color(0, 0, 0, 0), 0, 1, 0, 1);
+			fog_res_alloc = fog_n;
+			fog_has_history = false;
+		}
+		const float voxel = 2.0f * scene->fog_length / float(fog_n);
+		const Vector3 cp = cam.origin / voxel;
+		const Vector3i cell(int(Math::floor(cp.x)), int(Math::floor(cp.y)), int(Math::floor(cp.z)));
+		fog_shift = fog_has_history ? cell - fog_center_cell : Vector3i();
+		fog_center_cell = cell;
+		const Vector3 origin = Vector3(cell - Vector3i(fog_n / 2, fog_n / 2, fog_n / 2)) * voxel;
+		f.fog_origin[0] = origin.x;
+		f.fog_origin[1] = origin.y;
+		f.fog_origin[2] = origin.z;
+		f.fog_origin[3] = voxel;
+	} else if (fog_env_bound.is_valid()) {
+		_free_fog();
+	}
+	f.fog_grid[0] = fog_n;
+	f.fog_grid[1] = fog_rpv;
+	f.fog_grid[2] = fog_active ? 1 : 0;
+	f.fog_grid[3] = total_probes * 32;
+	f.fog_shift[0] = fog_shift.x;
+	f.fog_shift[1] = fog_shift.y;
+	f.fog_shift[2] = fog_shift.z;
+	f.fog_max_frames = float(MAX(fog_max_frames, 1));
 	PackedByteArray ubo;
 	ubo.resize(sizeof(f));
 	memcpy(ubo.ptrw(), &f, sizeof(f));
@@ -339,7 +412,6 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 	const RID ambient = rb->get_texture_slice("rbgi", "ambient", 0, 0, 1, 1);
 	const RID reflection = rb->get_texture_slice("rbgi", "reflection", 0, 0, 1, 1);
 	const Vector2i groups8 = (size + Vector2i(7, 7)) / 8;
-	const int total_probes = probe_grid.x * probe_grid.y + max_adaptive;
 	auto depth_u = [&](int b) { return uni(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, b, nearest_sampler, depth); };
 	auto normal_u = [&](int b) { return uni(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, b, nearest_sampler, normal); };
 	auto buf = [&](int b, const RID &r) { return uni(RD::UNIFORM_TYPE_STORAGE_BUFFER, b, r); };
@@ -383,7 +455,8 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 	}
 	rd->compute_list_end();
 	if (world_active) {
-		world.trace(frame_ubo, probes, rays, counter, uint32_t(total_probes) * 32u);
+		const uint32_t fog_ray_count = fog_active ? uint32_t(fog_n * fog_n * fog_n * fog_rpv) : 0u;
+		world.trace(frame_ubo, probes, rays, counter, fog_active ? fog_rays : rays, uint32_t(total_probes) * 32u + fog_ray_count);
 	}
 	const int64_t cl2 = rd->compute_list_begin();
 	{ // Gather rays -> probe radiance
@@ -426,7 +499,27 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 		u.push_back(img(11, moments[ping]));
 		_dispatch(cl2, PASS_TEMPORAL, u, groups8.x, groups8.y);
 	}
+	if (fog_active) { // Fog GI volume accumulate (history -> volume), then keep a copy as next history.
+		TypedArray<RDUniform> u;
+		u.push_back(buf(1, fog_rays));
+		u.push_back(uni(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 2, nearest_sampler, fog_history));
+		u.push_back(img(3, fog_volume));
+		_dispatch(cl2, PASS_FOG_ACCUMULATE, u, (fog_n + 3) / 4, (fog_n + 3) / 4, (fog_n + 3) / 4);
+	}
 	rd->compute_list_end();
+	if (fog_active) {
+		rd->texture_copy(fog_volume, fog_history, Vector3(), Vector3(), Vector3(fog_n, fog_n, fog_n), 0, 0, 0, 0);
+		fog_has_history = true;
+		const RID env = p_render_data->get_environment();
+		if (env != fog_env_bound || scene->fog_length != fog_extent_bound) {
+			if (fog_env_bound.is_valid() && env != fog_env_bound) {
+				RenderingServer::get_singleton()->environment_set_volumetric_fog_gi_volume(fog_env_bound, RID(), 0.0f);
+			}
+			RenderingServer::get_singleton()->environment_set_volumetric_fog_gi_volume(env, fog_volume, scene->fog_length);
+			fog_env_bound = env;
+			fog_extent_bound = scene->fog_length;
+		}
+	}
 	if (world_active) {
 		world.resolve_cache(frame_ubo);
 	}
@@ -512,6 +605,10 @@ void GoghotScreenProbeGI::_bind_methods() {
 	GOGHOT_BIND(Variant::FLOAT, cache_cell_scale, PROPERTY_HINT_RANGE, "0.001,0.2,0.001")
 	GOGHOT_BIND(Variant::INT, cache_max_frames, PROPERTY_HINT_RANGE, "1,256,1")
 	GOGHOT_BIND(Variant::INT, cache_mature_frames, PROPERTY_HINT_RANGE, "1,256,1")
+	GOGHOT_BIND(Variant::BOOL, fog_gi, PROPERTY_HINT_NONE, "")
+	GOGHOT_BIND(Variant::INT, fog_resolution, PROPERTY_HINT_RANGE, "8,128,2")
+	GOGHOT_BIND(Variant::INT, fog_rays_per_voxel, PROPERTY_HINT_RANGE, "1,64,1")
+	GOGHOT_BIND(Variant::INT, fog_max_frames, PROPERTY_HINT_RANGE, "1,256,1")
 	ClassDB::bind_method(D_METHOD("is_world_tracer_supported"), &GoghotScreenProbeGI::is_world_tracer_supported);
 #undef GOGHOT_BIND
 }
