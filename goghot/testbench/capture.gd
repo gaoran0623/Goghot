@@ -140,6 +140,9 @@ func _build(root: Node3D) -> void:
 		var m: Dictionary = spec.materials[name]
 		var mat := StandardMaterial3D.new()
 		mat.albedo_color = _col(m.get("albedo", [0.8, 0.8, 0.8]))
+		if m.has("alpha"): # alpha blended (glass): Cycles uses the same alpha (transparent shadows: see cast_shadow)
+			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			mat.albedo_color.a = m.alpha
 		mat.roughness = m.get("roughness", 1.0)
 		mat.metallic = m.get("metallic", 0.0)
 		mat.metallic_specular = 0.0 if m.get("specular", 0.0) == 0.0 else 0.5
@@ -203,6 +206,8 @@ func _build(root: Node3D) -> void:
 		root.add_child(mi)
 		if o.has("keys"):
 			anim_nodes.append([mi, o])
+		if not o.get("cast_shadow", true):
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 	for l: Dictionary in spec.lights:
 		var node: Light3D

@@ -124,6 +124,8 @@ for name, m in spec["materials"].items():
     bsdf.inputs["Roughness"].default_value = m.get("roughness", 1.0)
     bsdf.inputs["Metallic"].default_value = m.get("metallic", 0.0)
     bsdf.inputs["Specular IOR Level"].default_value = 0.0 if m.get("specular", 0.0) == 0.0 else 0.5
+    if "alpha" in m:  # alpha blended (glass), like Godot's TRANSPARENCY_ALPHA
+        bsdf.inputs["Alpha"].default_value = m["alpha"]
     if "albedo_texture" in m:
         nt = mat.node_tree
         tex = nt.nodes.new("ShaderNodeTexImage")

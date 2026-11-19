@@ -15,7 +15,7 @@ struct Geo {
 	uint emission_texture; // texture slot, 0xFFFFFFFF = none
 	uint emission_multiply; // 1: emission * texture, 0: emission + texture * energy
 	float emission_energy;
-	float pad_geo;
+	float opacity; // alpha blended materials: rays pass with probability 1 - opacity (any hit)
 };
 layout(set = 0, binding = 5, std430) restrict readonly buffer Geos { Geo geos[]; };
 layout(set = 0, binding = 6, std430) restrict readonly buffer Normals { vec4 normals[]; };

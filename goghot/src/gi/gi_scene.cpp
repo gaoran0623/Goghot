@@ -147,6 +147,9 @@ GIMaterial GoghotGIScene::_material_of(const Ref<Material> &p_mat) {
 			out.coverage = st.coverage_at_half;
 		}
 		const BaseMaterial3D::Transparency tr = bm->get_transparency();
+		if (tr == BaseMaterial3D::TRANSPARENCY_ALPHA || tr == BaseMaterial3D::TRANSPARENCY_ALPHA_DEPTH_PRE_PASS) {
+			out.opacity = CLAMP(a.a, 0.0f, 1.0f);
+		}
 		if (tr == BaseMaterial3D::TRANSPARENCY_ALPHA_SCISSOR) {
 			out.alpha_scissor = bm->get_alpha_scissor_threshold();
 		} else if (tr == BaseMaterial3D::TRANSPARENCY_ALPHA_HASH) {
@@ -173,7 +176,7 @@ GIMaterial GoghotGIScene::_material_of(const Ref<Material> &p_mat) {
 }
 
 void GoghotGIScene::_add_instance(GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index, const Ref<Mesh> &p_mesh,
-		const Transform3D &p_xform, const Ref<Material> &p_override, uint64_t p_key) {
+		const Transform3D &p_xform, const Ref<Material> &p_override, uint64_t p_key, bool p_cast_shadow) {
 	std::shared_ptr<const GIMeshCPU> m = _get_mesh(p_mesh);
 	if (!m || m->surfaces.empty()) {
 		return;
@@ -192,6 +195,7 @@ void GoghotGIScene::_add_instance(GISceneSnapshot &r_snap, std::unordered_map<ui
 	inst.xform = p_xform;
 	inst.aabb = p_xform.xform(p_mesh->get_aabb());
 	inst.key = p_key;
+	inst.cast_shadow = p_cast_shadow;
 	for (const GIMeshCPU::Surface &surf : m->surfaces) {
 		inst.materials.push_back(_material_of(p_override.is_valid() ? p_override : p_mesh->surface_get_material(surf.source_surface)));
 	}
@@ -273,6 +277,7 @@ void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unorder
 				inst.deformed = (mi->get_skin().is_valid() && !mi->get_skeleton_path().is_empty()) || (am.is_valid() && am->get_blend_shape_count() > 0);
 				inst.rs_instance = mi->get_instance();
 				inst.key = instance_key(mi, 0);
+				inst.cast_shadow = mi->get_cast_shadows_setting() != GeometryInstance3D::SHADOW_CASTING_SETTING_OFF;
 				inst.aabb = inst.xform.xform(mi->get_aabb());
 				if (inst.deformed) {
 					// Animated poses can leave the rest pose bounds: grow them (tier B dirty regions).
@@ -297,14 +302,14 @@ void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unorder
 			for (int i = 0; i < count && (i + 1) * stride <= buf.size(); i++) {
 				const float *f = buf.ptr() + i * stride;
 				const Transform3D t(Basis(f[0], f[1], f[2], f[4], f[5], f[6], f[8], f[9], f[10]), Vector3(f[3], f[7], f[11]));
-				_add_instance(r_snap, r_mesh_index, mm->get_mesh(), base * t, over, instance_key(mmi, uint64_t(i)));
+				_add_instance(r_snap, r_mesh_index, mm->get_mesh(), base * t, over, instance_key(mmi, uint64_t(i)), mmi->get_cast_shadows_setting() != GeometryInstance3D::SHADOW_CASTING_SETTING_OFF);
 			}
 		}
 	} else if (CSGShape3D *csg = Object::cast_to<CSGShape3D>(p_node)) {
 		if (geo_on && csg->is_root_shape()) {
 			const Array arr = csg->get_meshes(); // [local transform, baked mesh]
 			if (arr.size() >= 2) {
-				_add_instance(r_snap, r_mesh_index, arr[1], csg->get_global_transform() * Transform3D(arr[0]), csg->get_material_override(), instance_key(csg, 0));
+				_add_instance(r_snap, r_mesh_index, arr[1], csg->get_global_transform() * Transform3D(arr[0]), csg->get_material_override(), instance_key(csg, 0), csg->get_cast_shadows_setting() != GeometryInstance3D::SHADOW_CASTING_SETTING_OFF);
 			}
 		}
 	} else if (GridMap *gm = Object::cast_to<GridMap>(p_node)) {

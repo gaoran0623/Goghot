@@ -43,6 +43,7 @@ struct GIMaterial {
 	bool double_sided = false;
 	godot::Color texture_average = godot::Color(1, 1, 1); // linear average of the albedo texture (voxel tier)
 	float coverage = 1.0f; // fraction of the surface that is solid (alpha tested foliage < 1)
+	float opacity = 1.0f; // alpha blended (glass, ...): albedo alpha; rays pass with probability 1 - opacity
 	// Emission texture: emission = (emission + texture * energy) (add) or emission * texture (multiply).
 	godot::RID emission_texture;
 	bool emission_multiply = false;
@@ -58,6 +59,7 @@ struct GIInstance {
 	godot::RID rs_instance; // RenderingServer instance (for instance_surface_get_vertex_buffer_rd_rid)
 	godot::AABB aabb; // world bounds (deformed: rest pose bounds, grown)
 	uint64_t key = 0; // stable identity across frames (node, and cell / instance index)
+	bool cast_shadow = true; // GeometryInstance3D.cast_shadow != OFF: blocks shadow rays
 };
 
 struct GILight {
@@ -111,7 +113,7 @@ protected:
 	GIMaterial _material_of(const godot::Ref<godot::Material> &p_mat);
 	// One instance of p_mesh (materials: p_override, else the mesh's surface materials).
 	void _add_instance(GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index, const godot::Ref<godot::Mesh> &p_mesh,
-			const godot::Transform3D &p_xform, const godot::Ref<godot::Material> &p_override, uint64_t p_key);
+			const godot::Transform3D &p_xform, const godot::Ref<godot::Material> &p_override, uint64_t p_key, bool p_cast_shadow = true);
 
 	void _collect(godot::Node *p_node, GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index);
 	std::shared_ptr<const GIMeshCPU> _get_mesh(const godot::Ref<godot::Resource> &p_mesh);

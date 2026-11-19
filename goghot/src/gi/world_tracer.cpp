@@ -435,7 +435,7 @@ bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap, bool p_deformed,
 		float albedo[4];
 		float emission[4];
 		uint32_t emission_texture, emission_multiply;
-		float emission_energy, pad;
+		float emission_energy, opacity;
 	};
 	std::vector<GeoRow> rows;
 	texture_table.clear();
@@ -496,13 +496,13 @@ bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap, bool p_deformed,
 			};
 			const uint32_t ti = slot_of(mat.albedo_texture);
 			const uint32_t ei = slot_of(mat.emission_texture);
-			alpha_tested = alpha_tested || (mat.alpha_scissor >= 0.0f && ti != 0xFFFFFFFFu);
+			alpha_tested = alpha_tested || (mat.alpha_scissor >= 0.0f && ti != 0xFFFFFFFFu) || mat.opacity < 1.0f;
 			float scissor = ti != 0xFFFFFFFFu ? mat.alpha_scissor : -1.0f;
 			uint32_t scissor_bits;
 			memcpy(&scissor_bits, &scissor, 4);
 			rows.push_back({ index_bases[gi.mesh] + m.surfaces[s].index_base, vertex_base + m.surfaces[s].vertex_base, ti, scissor_bits,
 					{ mat.albedo.r, mat.albedo.g, mat.albedo.b, mat.double_sided ? 1.0f : 0.0f }, { mat.emission.r, mat.emission.g, mat.emission.b, 1.0f },
-					ei, mat.emission_multiply ? 1u : 0u, mat.emission_energy, 0.0f });
+					ei, mat.emission_multiply ? 1u : 0u, mat.emission_energy, mat.opacity });
 			if (!rt) {
 				VoxDraw vd;
 				vd.xform = gi.xform;
@@ -511,7 +511,7 @@ bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap, bool p_deformed,
 				vd.index_base = index_bases[gi.mesh] + m.surfaces[s].index_base;
 				vd.tri_count = m.surfaces[s].index_count / 3;
 				Color va = mat.albedo * (ti != 0xFFFFFFFFu ? mat.texture_average : Color(1, 1, 1));
-				const float cov = ti != 0xFFFFFFFFu && mat.alpha_scissor >= 0.0f ? mat.coverage : 1.0f;
+				const float cov = (ti != 0xFFFFFFFFu && mat.alpha_scissor >= 0.0f ? mat.coverage : 1.0f) * mat.opacity; // < 0.5: rays pass
 				vd.albedo[0] = va.r;
 				vd.albedo[1] = va.g;
 				vd.albedo[2] = va.b;
@@ -532,6 +532,7 @@ bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap, bool p_deformed,
 			}
 		}
 		// Alpha tested instances run the any-hit shader; everything else stays on the opaque fast path.
+		ri->set_mask(gi.cast_shadow ? 0x03 : 0x01); // bit 1: shadow caster (shadow rays use mask 0x02)
 		ri->set_flags(RD::ACCELERATION_STRUCTURE_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT |
 				(alpha_tested ? RD::ACCELERATION_STRUCTURE_INSTANCE_FORCE_NO_OPAQUE_BIT : RD::ACCELERATION_STRUCTURE_INSTANCE_FORCE_OPAQUE_BIT));
 		insts.push_back(ri);

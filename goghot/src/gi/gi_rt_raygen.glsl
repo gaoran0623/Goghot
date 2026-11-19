@@ -30,7 +30,7 @@ float light_attenuation(Light l, vec3 L, float dist) {
 float trace_shadow(vec3 o, vec3 d, float tmax) {
 	shadow_visible = 0.0;
 	traceRayEXT(tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT,
-			0xFF, 0, 1, 1, o, 0.0, d, tmax, 1);
+			0x02, 0, 1, 1, o, 0.0, d, tmax, 1); // shadow casters only
 	return shadow_visible;
 }
 
