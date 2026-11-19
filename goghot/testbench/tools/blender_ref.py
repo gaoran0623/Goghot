@@ -134,6 +134,33 @@ for name, m in spec["materials"].items():
     mats[name] = mat
 
 # Objects.
+skinned_objs = []
+
+
+def skin_pose(o, m, f):
+    # Same as capture.gd _apply_skinned + Godot LBS: S_k = G_k * Rest_k^-1, chain along +Y, rotation about Z.
+    hold = spec["camera"].get("hold_frames", 0)
+    a = o["anim"]
+    step = m["bone_step"]
+    mats = []
+    g = Matrix.Identity(4)
+    for k in range(m["bone_count"]):
+        t = max(f - hold, 0) if f >= hold else 0
+        ang = math.radians(a["amplitude"]) * math.sin(a["speed"] * t + a["phase"] + 0.6 * k)
+        local = (Matrix.Translation((0, step, 0)) if k > 0 else Matrix.Identity(4)) @ Matrix.Rotation(ang, 4, "Z")
+        g = g @ local
+        mats.append(g @ Matrix.Translation((0, -k * step, 0)))
+    out = []
+    for p, bs, ws in zip(m["vertices"], m["bones"], m["weights"]):
+        v = Vector((p[0], p[1], p[2], 1.0))
+        acc = Vector((0, 0, 0, 0))
+        for bi, wi in zip(bs, ws):
+            if wi > 0:
+                acc += (mats[bi] @ v) * wi
+        out.append(v3([acc.x, acc.y, acc.z]))  # Godot local (Y up) -> Blender local
+    return out
+
+
 for o in spec["objects"]:
     if o["type"] == "box":
         bpy.ops.mesh.primitive_cube_add(size=1.0, location=v3(o["center"]))
@@ -141,6 +168,16 @@ for o in spec["objects"]:
         s = o["size"]
         ob.scale = (s[0], s[2], s[1])
         ob.rotation_euler = (0.0, 0.0, math.radians(o.get("rot_y", 0.0)))
+    elif o["type"] == "skinned":
+        m = spec["skinned_meshes"][o["mesh"]]
+        me = bpy.data.meshes.new("skinned")
+        tris = [m["indices"][i:i + 3] for i in range(0, len(m["indices"]), 3)]
+        me.from_pydata([v3(p) for p in m["vertices"]], [], [t[::-1] for t in tris])
+        ob = bpy.data.objects.new("skinned", me)
+        scene.collection.objects.link(ob)
+        ob.location = v3(o["center"])
+        ob.rotation_euler = (0.0, 0.0, math.radians(o.get("rot_y", 0.0)))
+        skinned_objs.append((ob, o, m))
     elif o["type"] == "quad":
         # Plane in local XY facing +Z, same basis as capture.gd (right = up x normal).
         bpy.ops.mesh.primitive_plane_add(size=1.0)
@@ -155,6 +192,9 @@ for o in spec["objects"]:
     else:
         raise ValueError("unknown object type " + o["type"])
     ob.data.materials.append(mats[o["material"]])
+    if o["type"] == "skinned":
+        for poly in ob.data.polygons:
+            poly.use_smooth = False
 
 # Lights (values applied per frame in apply_frame).
 light_objs = []
@@ -175,6 +215,10 @@ for i, l in enumerate(spec["lights"]):
 
 
 def apply_frame(f):
+    for ob, o, m in skinned_objs:
+        for vert, co in zip(ob.data.vertices, skin_pose(o, m, f)):
+            vert.co = co
+        ob.data.update()
     for ob, l in light_objs:
         ob.data.color = keyed(l, "color", f)
         e = keyed(l, "energy", f)

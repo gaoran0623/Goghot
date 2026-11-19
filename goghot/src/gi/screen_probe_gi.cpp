@@ -357,7 +357,7 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 			pending_scene.reset();
 		}
 	}
-	const bool world_active = world_tracing && world.is_ready() && scene && world.update_scene(*scene);
+	const bool world_active = world_tracing && world.is_ready() && scene && world.update_scene(*scene, deformed_geometry);
 	store(cam, f.view_to_world);
 	f.light_count = world_active ? int32_t(world.light_count()) : 0;
 	f.cache_mask = int32_t(GIWorldTracer::CACHE_ENTRIES - 1);
@@ -651,6 +651,7 @@ void GoghotScreenProbeGI::_bind_methods() {
 	GOGHOT_BIND(Variant::INT, fog_rays_per_voxel, PROPERTY_HINT_RANGE, "1,64,1")
 	GOGHOT_BIND(Variant::INT, fog_max_frames, PROPERTY_HINT_RANGE, "1,256,1")
 	GOGHOT_BIND(Variant::BOOL, reflections, PROPERTY_HINT_NONE, "")
+	GOGHOT_BIND(Variant::BOOL, deformed_geometry, PROPERTY_HINT_NONE, "")
 	GOGHOT_BIND(Variant::FLOAT, reflection_max_roughness, PROPERTY_HINT_RANGE, "0,1,0.01")
 	GOGHOT_BIND(Variant::INT, reflection_min_frames, PROPERTY_HINT_RANGE, "1,64,1")
 	GOGHOT_BIND(Variant::INT, reflection_max_frames, PROPERTY_HINT_RANGE, "1,64,1")

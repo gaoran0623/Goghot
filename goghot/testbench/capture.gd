@@ -21,6 +21,7 @@ var spec: Dictionary
 var camera: Camera3D
 var env: Environment
 var light_nodes := [] # [Light3D, spec dict]
+var skinned := [] # [Skeleton3D, object spec, mesh spec]
 var gi_mode := "baseline"
 var exposure_mode := "fixed"
 var inject_effect: CompositorEffect
@@ -70,6 +71,8 @@ func _build(root: Node3D) -> void:
 				var bm := BoxMesh.new()
 				bm.size = _v3(o.size)
 				mi.mesh = bm
+			"skinned":
+				_build_skinned(mi, o)
 			"quad":
 				# QuadMesh faces local +Z; spec gives the world normal and up (right = up x normal).
 				var qm := QuadMesh.new()
@@ -173,6 +176,56 @@ func _build(root: Node3D) -> void:
 	camera.current = true
 
 
+# Skinned prism ("skinned_meshes" arrays + bone chain along +Y, bone k rest at k * bone_step).
+func _build_skinned(mi: MeshInstance3D, o: Dictionary) -> void:
+	var m: Dictionary = spec.skinned_meshes[o.mesh]
+	var arr := []
+	arr.resize(Mesh.ARRAY_MAX)
+	var v := PackedVector3Array()
+	var n := PackedVector3Array()
+	for p in m.vertices:
+		v.push_back(Vector3(p[0], p[1], p[2]))
+	for p in m.normals:
+		n.push_back(Vector3(p[0], p[1], p[2]))
+	var b := PackedInt32Array()
+	var w := PackedFloat32Array()
+	for i in m.bones.size():
+		for k in 4:
+			b.push_back(int(m.bones[i][k]))
+			w.push_back(float(m.weights[i][k]))
+	arr[Mesh.ARRAY_VERTEX] = v
+	arr[Mesh.ARRAY_NORMAL] = n
+	arr[Mesh.ARRAY_BONES] = b
+	arr[Mesh.ARRAY_WEIGHTS] = w
+	arr[Mesh.ARRAY_INDEX] = PackedInt32Array(m.indices)
+	var am := ArrayMesh.new()
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+	mi.mesh = am
+	var sk := Skeleton3D.new()
+	var skin := Skin.new()
+	for k in int(m.bone_count):
+		sk.add_bone("b%d" % k)
+		if k > 0:
+			sk.set_bone_parent(k, k - 1)
+			sk.set_bone_rest(k, Transform3D(Basis(), Vector3(0, m.bone_step, 0)))
+		skin.add_bind(k, Transform3D(Basis(), Vector3(0, -k * m.bone_step, 0))) # inverse rest global
+	sk.reset_bone_poses()
+	mi.add_child(sk)
+	mi.skin = skin
+	mi.skeleton = NodePath(sk.name)
+	skinned.append([sk, o, m])
+
+
+func _apply_skinned(f: int) -> void:
+	var hold: int = spec.camera.get("hold_frames", 0)
+	for s in skinned:
+		var sk: Skeleton3D = s[0]
+		var a: Dictionary = s[1].anim
+		for k in int(s[2].bone_count):
+			var ang := deg_to_rad(a.amplitude) * sin(a.speed * max(f - hold, 0) + a.phase + 0.6 * k) if f >= hold else deg_to_rad(a.amplitude) * sin(a.phase + 0.6 * k)
+			sk.set_bone_pose_rotation(k, Quaternion(Vector3(0, 0, 1), ang))
+
+
 # Value of `field` at frame f. Objects may carry "keys": [{"frame": F, <field>: value}, ...]
 # (linear interpolation, clamped). Must match tools/blender_ref.py keyed().
 func _keyed(o: Dictionary, field: String, f: int) -> Variant:
@@ -193,6 +246,7 @@ func _keyed(o: Dictionary, field: String, f: int) -> Variant:
 
 
 func _apply_frame(f: int) -> void:
+	_apply_skinned(f)
 	for pair in light_nodes:
 		var node: Light3D = pair[0]
 		var l: Dictionary = pair[1]

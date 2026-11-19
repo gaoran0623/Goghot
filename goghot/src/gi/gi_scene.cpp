@@ -2,7 +2,9 @@
 
 #include "screen_probe_gi.h"
 
+#include <godot_cpp/classes/array_mesh.hpp>
 #include <godot_cpp/classes/base_material3d.hpp>
+#include <godot_cpp/classes/skin.hpp>
 #include <godot_cpp/classes/camera3d.hpp>
 #include <godot_cpp/classes/environment.hpp>
 #include <godot_cpp/classes/viewport.hpp>
@@ -43,6 +45,8 @@ std::shared_ptr<const GIMeshCPU> GoghotGIScene::_get_mesh(const Ref<Resource> &p
 		PackedVector2Array uv = arrays[Mesh::ARRAY_TEX_UV];
 		GIMeshCPU::Surface surf;
 		surf.source_surface = s;
+		surf.has_normal = !nrm.is_empty();
+		surf.has_tangent = !PackedFloat32Array(arrays[Mesh::ARRAY_TANGENT]).is_empty();
 		surf.vertex_base = uint32_t(m->positions.size() / 3);
 		surf.vertex_count = uint32_t(pos.size());
 		surf.index_base = uint32_t(m->indices.size());
@@ -120,6 +124,9 @@ void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unorder
 				GIInstance inst;
 				inst.mesh = mesh_index;
 				inst.xform = mi->get_global_transform();
+				Ref<ArrayMesh> am = mesh;
+				inst.deformed = (mi->get_skin().is_valid() && !mi->get_skeleton_path().is_empty()) || (am.is_valid() && am->get_blend_shape_count() > 0);
+				inst.rs_instance = mi->get_instance();
 				for (const GIMeshCPU::Surface &surf : m->surfaces) {
 					inst.materials.push_back(material_of(mi->get_active_material(surf.source_surface)));
 				}
@@ -162,6 +169,11 @@ void GoghotGIScene::update_now() {
 	uint64_t h = 1469598103934665603ull;
 	for (const auto &m : snap->meshes) {
 		h = (h ^ m->id) * 1099511628211ull;
+	}
+	for (const GIInstance &inst : snap->instances) {
+		if (inst.deformed) {
+			h = (h ^ (inst.rs_instance.get_id() * 31 + 7)) * 1099511628211ull;
+		}
 	}
 	snap->mesh_set_hash = h;
 	Ref<Environment> env;

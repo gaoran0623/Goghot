@@ -6,6 +6,8 @@
 #include <godot_cpp/variant/rid.hpp>
 #include <godot_cpp/variant/typed_array.hpp>
 
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace goghot {
@@ -22,7 +24,7 @@ public:
 	bool is_ready() const { return ready; }
 
 	// Uploads/rebuilds what changed. Returns true when there is something to trace against.
-	bool update_scene(const GISceneSnapshot &p_snap);
+	bool update_scene(const GISceneSnapshot &p_snap, bool p_deformed = true);
 	uint32_t light_count() const { return lights_used; }
 
 	// Traces rays[] entries with w == 0 (see gi_rt_raygen.glsl). p_ray_count = probes * 32.
@@ -50,8 +52,24 @@ private:
 		godot::RID blas;
 		int64_t sbt_range = -1;
 		uint32_t surface_count = 0;
+		std::vector<godot::RID> index_buffers; // per surface (BLAS input)
+		uint32_t vertex_base = 0, index_base = 0; // into the global buffers
 	};
 	std::vector<MeshGPU> meshes;
+	// Deformed instances: own BLAS over Godot's per-instance deformed vertex buffers (engine patch 2),
+	// rebuilt every frame; normals decoded into their own region of the normal buffer.
+	struct DeformedGPU {
+		uint32_t mesh = 0;
+		godot::RID rs_instance;
+		uint32_t region_base = 0;
+		std::vector<godot::RID> sources;
+		godot::RID blas;
+	};
+	std::vector<DeformedGPU> deformed;
+	std::unordered_set<uint64_t> alive_deformed; // deformed instances present in the next snapshot
+	std::unordered_map<uint64_t, size_t> deformed_by_instance;
+	godot::RID skin_normals_shader, skin_normals_pipeline;
+	void _update_deformed(const GISceneSnapshot &p_snap);
 
 	// Per frame.
 	godot::RID tlas;

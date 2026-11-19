@@ -264264,6 +264264,28 @@
 					]
 				},
 				{
+					"name": "instance_surface_get_vertex_buffer_rd_rid",
+					"is_const": true,
+					"is_vararg": false,
+					"is_static": false,
+					"is_virtual": false,
+					"hash": 1066463050,
+					"return_value": {
+						"type": "RID"
+					},
+					"arguments": [
+						{
+							"name": "instance",
+							"type": "RID"
+						},
+						{
+							"name": "surface",
+							"type": "int",
+							"meta": "int32"
+						}
+					]
+				},
+				{
 					"name": "instance_geometry_get_shader_parameter",
 					"is_const": true,
 					"is_vararg": false,

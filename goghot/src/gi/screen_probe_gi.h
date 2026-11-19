@@ -73,6 +73,7 @@ class GoghotScreenProbeGI : public godot::CompositorEffect {
 	int fog_rays_per_voxel = 4;
 	int fog_max_frames = 32;
 	bool reflections = true;
+	bool deformed_geometry = true; // trace skinned instances in their animated pose (engine patch 2)
 	float reflection_max_roughness = 0.7f;
 	int reflection_min_frames = 8; // measured: 4 flickers (2.1% of pixels), 12 lags
 	int reflection_max_frames = 32;
@@ -166,6 +167,7 @@ public:
 	GOGHOT_PROP(int, fog_rays_per_voxel)
 	GOGHOT_PROP(int, fog_max_frames)
 	GOGHOT_PROP(bool, reflections)
+	GOGHOT_PROP(bool, deformed_geometry)
 	GOGHOT_PROP(float, reflection_max_roughness)
 	GOGHOT_PROP(int, reflection_min_frames)
 	GOGHOT_PROP(int, reflection_max_frames)

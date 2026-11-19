@@ -22,6 +22,7 @@ struct GIMeshCPU {
 	struct Surface {
 		uint32_t vertex_base, vertex_count, index_base, index_count;
 		int32_t source_surface; // surface index in the Mesh (empty surfaces are skipped)
+		bool has_normal, has_tangent; // layout of Godot's deformed vertex buffer
 	};
 	uint64_t id = 0; // Mesh RID id
 	std::vector<float> positions; // xyz per vertex (BLAS input)
@@ -43,6 +44,8 @@ struct GIInstance {
 	uint32_t mesh; // index into GISceneSnapshot::meshes
 	godot::Transform3D xform;
 	std::vector<GIMaterial> materials; // per surface
+	bool deformed = false; // skinned / blend shapes: geometry comes from Godot's per-instance buffer
+	godot::RID rs_instance; // RenderingServer instance (for instance_surface_get_vertex_buffer_rd_rid)
 };
 
 struct GILight {
@@ -57,7 +60,7 @@ struct GILight {
 
 struct GISceneSnapshot {
 	std::vector<std::shared_ptr<const GIMeshCPU>> meshes;
-	uint64_t mesh_set_hash = 0; // changes when the set of meshes changes (GPU buffers / BLAS rebuild)
+	uint64_t mesh_set_hash = 0; // changes when the set of meshes or deformed instances changes (GPU rebuild)
 	std::vector<GIInstance> instances;
 	std::vector<GILight> lights;
 	bool fog_enabled = false; // Environment volumetric fog of the active camera / world
