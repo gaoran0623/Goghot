@@ -1,0 +1,136 @@
+// Tier B voxelization, deterministic two pass (VOXELIZE_PASS 0 / 1): one workgroup per triangle of
+// one instance surface (push constants), its 64 threads splitting the triangle's voxel bounding box
+// (big triangles such as ground planes cover thousands of voxels), into every cascade.
+// A voxel is touched when the triangle's plane crosses the voxel box and the voxel center projects
+// inside the triangle (grown by half a voxel), conservative enough that walls stay closed.
+// Each voxel has two face slots (by the sign of the normal's dominant axis, see gi_voxel_common).
+//   pass 0: every touching triangle bids for its face slot with imageAtomicMax(rank << 24 | id),
+//           rank = how close its plane is to the voxel center; occupancy = max coverage.
+//   pass 1: only the winning triangle writes the slot's albedo / normal / emission.
+// So the result does not depend on GPU scheduling (last-write-wins would flicker every frame).
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 1, std430) restrict readonly buffer Positions { float positions[]; };
+layout(set = 0, binding = 2, std430) restrict readonly buffer Indices { uint indices[]; };
+layout(r32ui, set = 0, binding = 3) uniform restrict uimage3D vox_occ;
+layout(r32ui, set = 0, binding = 4) uniform restrict uimage3D vox_key0;
+layout(r32ui, set = 0, binding = 5) uniform restrict uimage3D vox_key1;
+layout(rgba8, set = 0, binding = 6) uniform restrict writeonly image3D vox_albedo0;
+layout(rgba8, set = 0, binding = 7) uniform restrict writeonly image3D vox_albedo1;
+layout(rgba8, set = 0, binding = 8) uniform restrict writeonly image3D vox_normal0;
+layout(rgba8, set = 0, binding = 9) uniform restrict writeonly image3D vox_normal1;
+layout(rgba16f, set = 0, binding = 10) uniform restrict writeonly image3D vox_emission0;
+layout(rgba16f, set = 0, binding = 11) uniform restrict writeonly image3D vox_emission1;
+
+layout(push_constant, std430) uniform PC {
+	vec4 xform_x; // rows of the instance transform (object -> world)
+	vec4 xform_y;
+	vec4 xform_z;
+	vec4 albedo; // rgb voxel albedo, a coverage
+	vec4 emission; // rgb emission, a: double sided
+	uint vertex_base;
+	uint index_base;
+	uint tri_count;
+	uint draw_id; // unique per draw this frame (tie-break of the bids)
+}
+pc;
+
+vec3 world_pos(uint i) {
+	uint b = (pc.vertex_base + i) * 3u;
+	vec4 p = vec4(positions[b], positions[b + 1u], positions[b + 2u], 1.0);
+	return vec3(dot(pc.xform_x, p), dot(pc.xform_y, p), dot(pc.xform_z, p));
+}
+
+void face_write(int slot, ivec3 t, uint key, vec3 face_n) {
+#if VOXELIZE_PASS == 0
+	if (slot == 0) {
+		imageAtomicMax(vox_key0, t, key);
+	} else {
+		imageAtomicMax(vox_key1, t, key);
+	}
+#else
+	uint owner = slot == 0 ? imageLoad(vox_key0, t).r : imageLoad(vox_key1, t).r;
+	if (owner != key) {
+		return;
+	}
+	vec4 nrm = vec4(face_n * 0.5 + 0.5, 1.0);
+	if (slot == 0) {
+		imageStore(vox_albedo0, t, vec4(pc.albedo.rgb, 1.0));
+		imageStore(vox_normal0, t, nrm);
+		imageStore(vox_emission0, t, vec4(pc.emission.rgb, 1.0));
+	} else {
+		imageStore(vox_albedo1, t, vec4(pc.albedo.rgb, 1.0));
+		imageStore(vox_normal1, t, nrm);
+		imageStore(vox_emission1, t, vec4(pc.emission.rgb, 1.0));
+	}
+#endif
+}
+
+void main() {
+	uint tri = gl_WorkGroupID.x;
+	uint lane = gl_LocalInvocationID.x;
+	if (tri >= pc.tri_count) {
+		return;
+	}
+	uint ib = pc.index_base + tri * 3u;
+	vec3 a = world_pos(indices[ib]);
+	vec3 b = world_pos(indices[ib + 1u]);
+	vec3 c = world_pos(indices[ib + 2u]);
+	vec3 n = cross(b - a, c - a);
+	float area2 = length(n);
+	if (area2 < 1e-12) {
+		return;
+	}
+	n /= area2;
+	n = -n; // Godot front faces are clockwise: this winding's normal points inwards
+	vec3 an = abs(n);
+	int axis = (an.x > an.y && an.x > an.z) ? 0 : (an.y > an.z ? 1 : 2);
+	bool positive = n[axis] >= 0.0;
+	bool double_sided = pc.emission.a > 0.5;
+	uint id = ((pc.draw_id & 0xFFu) << 16u) | (tri & 0xFFFFu);
+	int N = fr.vox_params.x;
+	for (int cas = 0; cas < fr.vox_params.y; cas++) {
+		float size = fr.vox_origin[cas].w;
+		vec3 org = fr.vox_origin[cas].xyz;
+		vec3 lo = (min(a, min(b, c)) - org) / size - 0.5;
+		vec3 hi = (max(a, max(b, c)) - org) / size + 0.5;
+		ivec3 vlo = max(ivec3(floor(lo)), ivec3(0));
+		ivec3 vhi = min(ivec3(floor(hi)), ivec3(N - 1));
+		if (any(greaterThan(vlo, vhi))) {
+			continue;
+		}
+		float half_extent = 0.5 * size * (an.x + an.y + an.z); // voxel box projected on n
+		float grow = 0.5 * size;
+		ivec3 ext = vhi - vlo + 1;
+		uint count = uint(ext.x * ext.y * ext.z);
+		vec3 e0 = cross(n, b - a), e1 = cross(n, c - b), e2 = cross(n, a - c);
+		float l0 = length(e0), l1 = length(e1), l2 = length(e2);
+		for (uint k = lane; k < count; k += 64u) {
+			int x = vlo.x + int(k % uint(ext.x));
+			int y = vlo.y + int((k / uint(ext.x)) % uint(ext.y));
+			int z = vlo.z + int(k / uint(ext.x * ext.y));
+			vec3 p = org + (vec3(x, y, z) + 0.5) * size;
+			float d = dot(n, p - a);
+			if (abs(d) > half_extent) {
+				continue;
+			}
+			vec3 q = p - d * n;
+			bool inside = dot(q - a, e0) >= -grow * l0 && dot(q - b, e1) >= -grow * l1 && dot(q - c, e2) >= -grow * l2;
+			bool inside_flipped = dot(q - a, e0) <= grow * l0 && dot(q - b, e1) <= grow * l1 && dot(q - c, e2) <= grow * l2;
+			if (!inside && !inside_flipped) {
+				continue;
+			}
+			ivec3 t = ivec3(x, y, z + cas * N);
+			uint rank = 255u - uint(clamp(abs(d) / max(half_extent, 1e-6), 0.0, 1.0) * 254.0);
+			uint key = (rank << 24u) | id;
+#if VOXELIZE_PASS == 0
+			imageAtomicMax(vox_occ, t, uint(clamp(pc.albedo.a, 0.0, 1.0) * 255.0));
+#endif
+			if (positive || double_sided) {
+				face_write(0, t, key, positive ? n : -n);
+			}
+			if (!positive || double_sided) {
+				face_write(1, t, key, positive ? -n : n);
+			}
+		}
+	}
+}

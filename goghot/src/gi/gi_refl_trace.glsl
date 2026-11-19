@@ -74,6 +74,7 @@ void main() {
 	vec3 origin = p + n * max(-p.z, fr.near) * 0.002;
 	r.origin = vec4((fr.view_to_world * vec4(origin, 1.0)).xyz, 0.0);
 	r.dir.xyz = normalize(mat3(fr.view_to_world) * l);
+	r.radiance = vec4(normalize(mat3(fr.view_to_world) * n), 0.0); // surface normal for the world tracer, until resolved
 
 	vec2 hit_px;
 	if (trace_screen(origin, l, hit_px)) {

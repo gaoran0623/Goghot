@@ -36,7 +36,7 @@ using RD = RenderingDevice;
 
 namespace {
 
-// std140 layout of the Frame UBO in gi_common.glsl (560 bytes).
+// std140 layout of the Frame UBO in gi_common.glsl (624 bytes).
 struct FrameUBO {
 	float proj[16];
 	float inv_proj[16];
@@ -80,8 +80,10 @@ struct FrameUBO {
 	float pad4[3];
 	int32_t refl_grid[4];
 	float refl_params[4];
+	float vox_origin[3][4];
+	int32_t vox_params[4];
 };
-static_assert(sizeof(FrameUBO) == 560, "Frame UBO layout");
+static_assert(sizeof(FrameUBO) == 624, "Frame UBO layout");
 
 void store(const Projection &p_m, float *r_out) {
 	for (int c = 0; c < 4; c++) {
@@ -357,7 +359,19 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 			pending_scene.reset();
 		}
 	}
-	const bool world_active = world_tracing && world.is_ready() && scene && world.update_scene(*scene, deformed_geometry);
+	// Tracer tier: A = hardware RT, B = voxels, C = none (screen + sky). Auto picks A when supported.
+	const int requested = tracer == TRACER_AUTO ? (world.is_rt_supported() ? TRACER_A : TRACER_B) : tracer;
+	const bool tier_b = requested == TRACER_B || (requested == TRACER_A && !world.is_rt_supported());
+	const bool world_active = world_tracing && requested != TRACER_C && world.is_ready() && scene &&
+			world.update_scene(*scene, deformed_geometry, tier_b ? GIWorldTracer::TIER_B_VOXEL : GIWorldTracer::TIER_A_RT);
+	active_tier = !world_active ? TRACER_C : (tier_b ? TRACER_B : TRACER_A);
+	if (world_active && tier_b) {
+		world.voxel_setup(cam.origin, CLAMP(voxel_resolution, 32, 256) & ~3, MAX(voxel_size, 0.01f), f.vox_origin);
+		f.vox_params[0] = CLAMP(voxel_resolution, 32, 256) & ~3;
+		f.vox_params[1] = GIWorldTracer::VOXEL_CASCADES;
+		f.vox_params[2] = 1;
+		f.vox_params[3] = CLAMP(voxel_bounce_rays, 1, 16);
+	}
 	store(cam, f.view_to_world);
 	f.light_count = world_active ? int32_t(world.light_count()) : 0;
 	f.cache_mask = int32_t(GIWorldTracer::CACHE_ENTRIES - 1);
@@ -365,7 +379,7 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 	f.cache_mature_frames = cache_mature_frames;
 	f.cache_min_cell = cache_min_cell;
 	f.cache_cell_scale = cache_cell_scale;
-	f.cache_max_frames = float(MAX(cache_max_frames, 1));
+	f.cache_max_frames = float(MAX(active_tier == TRACER_B ? voxel_cache_max_frames : cache_max_frames, 1));
 
 	// Fog GI volume: centered on the camera, snapped to whole voxels, half size = fog length.
 	const bool fog_active = world_active && fog_gi && scene->fog_enabled && scene->fog_length > 0.0f;
@@ -485,7 +499,13 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 	rd->compute_list_end();
 	if (world_active) {
 		const uint32_t refl_ray_count = reflections ? uint32_t(refl_size.x * refl_size.y) : 0u;
-		world.trace(frame_ubo, probes, rays, counter, fog_active ? fog_rays : rays, refl_rays, uint32_t(total_probes) * 32u + fog_ray_total + refl_ray_count);
+		const uint32_t launch = uint32_t(total_probes) * 32u + fog_ray_total + refl_ray_count;
+		if (active_tier == TRACER_B) {
+			world.voxel_update(frame_ubo);
+			world.voxel_trace(frame_ubo, probes, rays, counter, fog_active ? fog_rays : rays, refl_rays, launch);
+		} else {
+			world.trace(frame_ubo, probes, rays, counter, fog_active ? fog_rays : rays, refl_rays, launch);
+		}
 	}
 	const int64_t cl2 = rd->compute_list_begin();
 	{ // Gather rays -> probe radiance
@@ -652,6 +672,12 @@ void GoghotScreenProbeGI::_bind_methods() {
 	GOGHOT_BIND(Variant::INT, fog_max_frames, PROPERTY_HINT_RANGE, "1,256,1")
 	GOGHOT_BIND(Variant::BOOL, reflections, PROPERTY_HINT_NONE, "")
 	GOGHOT_BIND(Variant::BOOL, deformed_geometry, PROPERTY_HINT_NONE, "")
+	GOGHOT_BIND(Variant::INT, tracer, PROPERTY_HINT_ENUM, "Auto,A Hardware RT,B Voxels,C Screen Only")
+	GOGHOT_BIND(Variant::INT, voxel_resolution, PROPERTY_HINT_RANGE, "32,256,4")
+	GOGHOT_BIND(Variant::FLOAT, voxel_size, PROPERTY_HINT_RANGE, "0.01,2,0.005,suffix:m")
+	GOGHOT_BIND(Variant::INT, voxel_bounce_rays, PROPERTY_HINT_RANGE, "1,16,1")
+	GOGHOT_BIND(Variant::INT, voxel_cache_max_frames, PROPERTY_HINT_RANGE, "1,256,1")
+	ClassDB::bind_method(D_METHOD("get_active_tier"), &GoghotScreenProbeGI::get_active_tier);
 	GOGHOT_BIND(Variant::FLOAT, reflection_max_roughness, PROPERTY_HINT_RANGE, "0,1,0.01")
 	GOGHOT_BIND(Variant::INT, reflection_min_frames, PROPERTY_HINT_RANGE, "1,64,1")
 	GOGHOT_BIND(Variant::INT, reflection_max_frames, PROPERTY_HINT_RANGE, "1,64,1")

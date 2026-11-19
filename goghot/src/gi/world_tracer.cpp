@@ -67,11 +67,7 @@ RID GIWorldTracer::_storage(const PackedByteArray &p_data) {
 	return rd->storage_buffer_create(MAX(p_data.size(), 16), p_data);
 }
 
-bool GIWorldTracer::init(RenderingDevice *p_rd, const String &, const String &) {
-	rd = p_rd;
-	if (rd == nullptr || !rd->has_feature(RD::SUPPORTS_RAYTRACING_PIPELINE)) {
-		return false;
-	}
+bool GIWorldTracer::_init_rt() {
 	const String rt_prefix = String(RT_HEADER) + String(GI_COMMON_GLSL) + "#define CACHE_BINDING 9\n" + String(GI_CACHE_GLSL) + String(GI_RT_COMMON_GLSL);
 	Ref<RDShaderSource> src;
 	src.instantiate();
@@ -84,7 +80,7 @@ bool GIWorldTracer::init(RenderingDevice *p_rd, const String &, const String &) 
 		String err = spirv->get_stage_compile_error(st);
 		if (!err.is_empty()) {
 			UtilityFunctions::push_error("Goghot world tracer shader stage ", int(st), ": ", err);
-			return false;
+			return false; // tier A unavailable
 		}
 	}
 	rt_shader = rd->shader_create_from_spirv(spirv);
@@ -95,7 +91,7 @@ bool GIWorldTracer::init(RenderingDevice *p_rd, const String &, const String &) 
 	Ref<RDShaderSPIRV> sspirv = rd->shader_compile_spirv_from_source(ssrc);
 	if (!sspirv->get_stage_compile_error(RD::SHADER_STAGE_MISS).is_empty()) {
 		UtilityFunctions::push_error("Goghot shadow miss shader: ", sspirv->get_stage_compile_error(RD::SHADER_STAGE_MISS));
-		return false;
+		return false; // tier A unavailable
 	}
 	shadow_miss_shader = rd->shader_create_from_spirv(sspirv);
 
@@ -112,10 +108,19 @@ bool GIWorldTracer::init(RenderingDevice *p_rd, const String &, const String &) 
 	rt_pipeline = rd->raytracing_pipeline_create(raygens, misses, hits, 2);
 	if (!rt_pipeline.is_valid()) {
 		UtilityFunctions::push_error("Goghot: raytracing_pipeline_create failed");
-		return false;
+		return false; // tier A unavailable
 	}
 	hit_sbt = rd->hit_sbt_create(rt_pipeline, 64);
 
+	return true;
+}
+
+bool GIWorldTracer::init(RenderingDevice *p_rd, const String &, const String &) {
+	rd = p_rd;
+	if (rd == nullptr) {
+		return false;
+	}
+	rt_supported = rd->has_feature(RD::SUPPORTS_RAYTRACING_PIPELINE) && _init_rt();
 	Ref<RDShaderSource> csrc;
 	csrc.instantiate();
 	csrc->set_stage_source(RD::SHADER_STAGE_COMPUTE, String("#version 450\n") + String(GI_COMMON_GLSL) + "#define CACHE_BINDING 1\n" + String(GI_CACHE_GLSL) + String(GI_CACHE_RESOLVE_GLSL));
@@ -163,6 +168,9 @@ bool GIWorldTracer::init(RenderingDevice *p_rd, const String &, const String &) 
 		ss->set_repeat_v(RD::SAMPLER_REPEAT_MODE_REPEAT);
 		texture_sampler = rd->sampler_create(ss);
 	}
+	if (!_init_voxel()) {
+		return false;
+	}
 	clear_cache();
 	ready = true;
 	return true;
@@ -198,7 +206,7 @@ void GIWorldTracer::_free_geometry() {
 		rd->free_rid(b);
 	}
 	blas_index_buffers.clear();
-	for (RID *r : { &vertex_buffer, &normal_storage, &index_storage, &uv_storage }) {
+	for (RID *r : { &vertex_buffer, &normal_storage, &index_storage, &uv_storage, &position_storage }) {
 		if (r->is_valid()) {
 			rd->free_rid(*r);
 		}
@@ -213,6 +221,7 @@ void GIWorldTracer::free() {
 	}
 	alive_deformed.clear(); // shutdown / effect freed: deformed BLASes go with Godot's buffers
 	_free_geometry();
+	_free_voxel();
 	for (RID *r : { &tlas, &geo_buffer, &light_buffer, &cache, &cache_resolve_shader, &rt_shader, &shadow_miss_shader, &white_texture, &texture_sampler, &skin_normals_shader }) {
 		if (r->is_valid()) {
 			rd->free_rid(*r); // shaders free their pipelines / SBT
@@ -228,6 +237,7 @@ void GIWorldTracer::free() {
 }
 
 void GIWorldTracer::_rebuild_geometry(const GISceneSnapshot &p_snap) {
+	const bool build_rt = built_tier == TIER_A_RT && rt_supported;
 	alive_deformed.clear();
 	for (const GIInstance &gi : p_snap.instances) {
 		if (gi.deformed) {
@@ -270,13 +280,24 @@ void GIWorldTracer::_rebuild_geometry(const GISceneSnapshot &p_snap) {
 	const auto build_input = RD::BUFFER_CREATION_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT;
 	PackedByteArray pos_bytes = bytes_of(positions);
 	PackedByteArray idx_bytes = bytes_of(indices);
-	vertex_buffer = rd->vertex_buffer_create(pos_bytes.size(), pos_bytes, build_input);
+	if (build_rt) {
+		vertex_buffer = rd->vertex_buffer_create(pos_bytes.size(), pos_bytes, build_input);
+	}
+	position_storage = _storage(pos_bytes);
 	normal_storage = _storage(bytes_of(normals));
 	index_storage = _storage(idx_bytes);
 	uv_storage = _storage(bytes_of(uvs));
 
 	for (size_t mi = 0; mi < p_snap.meshes.size(); mi++) {
 		const GIMeshCPU &m = *p_snap.meshes[mi];
+		if (!build_rt) {
+			MeshGPU gpu;
+			gpu.surface_count = uint32_t(m.surfaces.size());
+			gpu.vertex_base = bases[mi].vertex;
+			gpu.index_base = bases[mi].index;
+			meshes.push_back(gpu);
+			continue;
+		}
 		TypedArray<RDAccelerationStructureGeometry> geoms;
 		std::vector<RID> index_buffers_of_mesh;
 		for (const GIMeshCPU::Surface &s : m.surfaces) {
@@ -314,7 +335,7 @@ void GIWorldTracer::_rebuild_geometry(const GISceneSnapshot &p_snap) {
 	mesh_set_hash = p_snap.mesh_set_hash;
 }
 
-void GIWorldTracer::_update_deformed(const GISceneSnapshot &p_snap) {
+void GIWorldTracer::_update_deformed(const GISceneSnapshot &p_snap, bool p_rt) {
 	if (deformed.empty()) {
 		return;
 	}
@@ -335,7 +356,9 @@ void GIWorldTracer::_update_deformed(const GISceneSnapshot &p_snap) {
 		if (!all_valid) {
 			continue; // not deformed on the GPU yet: the static BLAS is used this frame
 		}
-		if (changed) { // (re)create over the current buffers (they swap when motion vectors are on)
+		if (!p_rt) {
+			d.sources = src;
+		} else if (changed) { // (re)create over the current buffers (they swap when motion vectors are on)
 			if (d.blas.is_valid()) {
 				rd->free_rid(d.blas);
 			}
@@ -379,26 +402,32 @@ void GIWorldTracer::_update_deformed(const GISceneSnapshot &p_snap) {
 	}
 	rd->compute_list_end();
 	for (DeformedGPU &d : deformed) {
-		if (d.blas.is_valid()) {
+		if (p_rt && d.blas.is_valid()) {
 			rd->blas_build(d.blas); // deformed every frame: full rebuild (no refit API)
 		}
 	}
 }
 
-bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap, bool p_deformed) {
+bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap, bool p_deformed, Tier p_tier) {
 	if (!ready) {
 		return false;
 	}
-	if (p_snap.mesh_set_hash != mesh_set_hash) {
+	if (p_tier == TIER_A_RT && !rt_supported) {
+		p_tier = TIER_B_VOXEL;
+	}
+	if (p_snap.mesh_set_hash != mesh_set_hash || p_tier != built_tier) {
+		built_tier = p_tier;
 		_rebuild_geometry(p_snap);
 	}
+	const bool rt = built_tier == TIER_A_RT;
 	if (meshes.empty()) {
 		instances_used = 0;
 		return false;
 	}
 	if (p_deformed) {
-		_update_deformed(p_snap);
+		_update_deformed(p_snap, rt);
 	}
+	vox_draws.clear();
 
 	// Geometry/material table: one row per instance surface; instance custom index = first row.
 	struct GeoRow {
@@ -426,11 +455,15 @@ bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap, bool p_deformed)
 		ri.instantiate();
 		uint32_t vertex_base = vertex_bases[gi.mesh];
 		ri->set_blas(meshes[gi.mesh].blas);
+		const DeformedGPU *def = nullptr;
 		if (gi.deformed && p_deformed) {
 			auto it = deformed_by_instance.find(gi.rs_instance.get_id());
-			if (it != deformed_by_instance.end() && deformed[it->second].blas.is_valid()) {
-				ri->set_blas(deformed[it->second].blas);
-				vertex_base = deformed[it->second].region_base;
+			if (it != deformed_by_instance.end() && (rt ? deformed[it->second].blas.is_valid() : !deformed[it->second].sources.empty() && deformed[it->second].sources[0].is_valid())) {
+				def = &deformed[it->second];
+				if (rt) {
+					ri->set_blas(def->blas);
+				}
+				vertex_base = def->region_base;
 			}
 		}
 		ri->set_transform(gi.xform);
@@ -459,6 +492,25 @@ bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap, bool p_deformed)
 			memcpy(&scissor_bits, &scissor, 4);
 			rows.push_back({ index_bases[gi.mesh] + m.surfaces[s].index_base, vertex_base + m.surfaces[s].vertex_base, ti, scissor_bits,
 					{ mat.albedo.r, mat.albedo.g, mat.albedo.b, mat.double_sided ? 1.0f : 0.0f }, { mat.emission.r, mat.emission.g, mat.emission.b, 1.0f } });
+			if (!rt) {
+				VoxDraw vd;
+				vd.xform = gi.xform;
+				vd.positions = def ? def->sources[s] : position_storage;
+				vd.vertex_base = def ? 0u : vertex_bases[gi.mesh] + m.surfaces[s].vertex_base;
+				vd.index_base = index_bases[gi.mesh] + m.surfaces[s].index_base;
+				vd.tri_count = m.surfaces[s].index_count / 3;
+				Color va = mat.albedo * (ti != 0xFFFFFFFFu ? mat.texture_average : Color(1, 1, 1));
+				const float cov = ti != 0xFFFFFFFFu && mat.alpha_scissor >= 0.0f ? mat.coverage : 1.0f;
+				vd.albedo[0] = va.r;
+				vd.albedo[1] = va.g;
+				vd.albedo[2] = va.b;
+				vd.albedo[3] = cov;
+				vd.emission[0] = mat.emission.r;
+				vd.emission[1] = mat.emission.g;
+				vd.emission[2] = mat.emission.b;
+				vd.emission[3] = mat.double_sided ? 1.0f : 0.0f;
+				vox_draws.push_back(vd);
+			}
 		}
 		// Alpha tested instances run the any-hit shader; everything else stays on the opaque fast path.
 		ri->set_flags(RD::ACCELERATION_STRUCTURE_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT |
@@ -469,14 +521,16 @@ bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap, bool p_deformed)
 	if (instances_used == 0) {
 		return false;
 	}
-	if (instances_used > tlas_capacity) {
+	if (rt && instances_used > tlas_capacity) {
 		if (tlas.is_valid()) {
 			rd->free_rid(tlas);
 		}
 		tlas_capacity = MAX(instances_used * 2, 64u);
 		tlas = rd->tlas_create(tlas_capacity, RD::ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT);
 	}
-	rd->tlas_build(tlas, insts);
+	if (rt) {
+		rd->tlas_build(tlas, insts);
+	}
 
 	PackedByteArray geo_bytes = bytes_of(rows);
 	if (uint32_t(rows.size()) > geo_capacity) {

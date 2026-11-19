@@ -1,6 +1,7 @@
 #pragma once
 
 #include <godot_cpp/classes/node.hpp>
+#include <godot_cpp/classes/material.hpp>
 #include <godot_cpp/classes/resource.hpp>
 #include <godot_cpp/variant/color.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
@@ -38,6 +39,8 @@ struct GIMaterial {
 	godot::RID albedo_texture; // RenderingServer texture, invalid = none
 	float alpha_scissor = -1.0f; // < 0: opaque
 	bool double_sided = false;
+	godot::Color texture_average = godot::Color(1, 1, 1); // linear average of the albedo texture (voxel tier)
+	float coverage = 1.0f; // fraction of the surface that is solid (alpha tested foliage < 1)
 };
 
 struct GIInstance {
@@ -75,6 +78,12 @@ class GoghotGIScene : public godot::Node {
 
 	godot::Ref<GoghotScreenProbeGI> gi;
 	std::unordered_map<uint64_t, std::shared_ptr<const GIMeshCPU>> mesh_cache;
+	struct TextureStats {
+		godot::Color average;
+		float coverage_at_half;
+	};
+	std::unordered_map<uint64_t, TextureStats> texture_stats; // per albedo texture RID, computed once
+	GIMaterial _material_of(const godot::Ref<godot::Material> &p_mat);
 
 	void _collect(godot::Node *p_node, GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index);
 	std::shared_ptr<const GIMeshCPU> _get_mesh(const godot::Ref<godot::Resource> &p_mesh);

@@ -15,6 +15,7 @@
 #include <godot_cpp/classes/mesh_instance3d.hpp>
 #include <godot_cpp/classes/omni_light3d.hpp>
 #include <godot_cpp/classes/scene_tree.hpp>
+#include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/classes/texture2d.hpp>
 #include <godot_cpp/classes/window.hpp>
 #include <godot_cpp/core/class_db.hpp>
@@ -77,7 +78,7 @@ std::shared_ptr<const GIMeshCPU> GoghotGIScene::_get_mesh(const Ref<Resource> &p
 	return m;
 }
 
-static GIMaterial material_of(const Ref<Material> &p_mat) {
+GIMaterial GoghotGIScene::_material_of(const Ref<Material> &p_mat) {
 	GIMaterial out;
 	out.albedo = Color(0.5f, 0.5f, 0.5f);
 	out.emission = Color(0, 0, 0);
@@ -91,6 +92,40 @@ static GIMaterial material_of(const Ref<Material> &p_mat) {
 		Ref<Texture2D> tex = bm->get_texture(BaseMaterial3D::TEXTURE_ALBEDO);
 		if (tex.is_valid()) {
 			out.albedo_texture = tex->get_rid();
+			auto it = texture_stats.find(out.albedo_texture.get_id());
+			if (it == texture_stats.end()) {
+				// Average color (linear) and alpha-test coverage, from a downsampled CPU copy.
+				TextureStats st = { Color(1, 1, 1), 1.0f };
+				Ref<Image> img = tex->get_image();
+				if (img.is_valid() && !img->is_empty()) {
+					img = img->duplicate();
+					if (img->is_compressed()) {
+						img->decompress();
+					}
+					img->convert(Image::FORMAT_RGBA8);
+					img->resize(MIN(img->get_width(), 64), MIN(img->get_height(), 64), Image::INTERPOLATE_BILINEAR);
+					double r = 0, g = 0, b = 0, wsum = 0, cov = 0;
+					const int n = img->get_width() * img->get_height();
+					for (int y = 0; y < img->get_height(); y++) {
+						for (int x = 0; x < img->get_width(); x++) {
+							Color px = img->get_pixel(x, y);
+							Color l = Color(px.r, px.g, px.b).srgb_to_linear();
+							r += l.r * px.a;
+							g += l.g * px.a;
+							b += l.b * px.a;
+							wsum += px.a;
+							cov += px.a >= 0.5f ? 1.0 : 0.0;
+						}
+					}
+					if (wsum > 0) {
+						st.average = Color(r / wsum, g / wsum, b / wsum);
+					}
+					st.coverage_at_half = n > 0 ? float(cov / n) : 1.0f;
+				}
+				it = texture_stats.emplace(out.albedo_texture.get_id(), st).first;
+			}
+			out.texture_average = it->second.average;
+			out.coverage = it->second.coverage_at_half;
 		}
 		const BaseMaterial3D::Transparency tr = bm->get_transparency();
 		if (tr == BaseMaterial3D::TRANSPARENCY_ALPHA_SCISSOR) {
@@ -99,6 +134,9 @@ static GIMaterial material_of(const Ref<Material> &p_mat) {
 			out.alpha_scissor = 0.5f; // stochastic in the raster, a fixed test for the tracer
 		}
 		out.double_sided = bm->get_cull_mode() == BaseMaterial3D::CULL_DISABLED;
+		if (out.alpha_scissor < 0.0f) {
+			out.coverage = 1.0f; // opaque: the texture alpha does not cut holes
+		}
 		if (bm->get_feature(BaseMaterial3D::FEATURE_EMISSION)) {
 			out.emission = bm->get_emission().srgb_to_linear() * bm->get_emission_energy_multiplier();
 		}
@@ -128,7 +166,7 @@ void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unorder
 				inst.deformed = (mi->get_skin().is_valid() && !mi->get_skeleton_path().is_empty()) || (am.is_valid() && am->get_blend_shape_count() > 0);
 				inst.rs_instance = mi->get_instance();
 				for (const GIMeshCPU::Surface &surf : m->surfaces) {
-					inst.materials.push_back(material_of(mi->get_active_material(surf.source_surface)));
+					inst.materials.push_back(_material_of(mi->get_active_material(surf.source_surface)));
 				}
 				r_snap.instances.push_back(std::move(inst));
 			}

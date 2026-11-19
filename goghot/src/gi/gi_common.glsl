@@ -47,6 +47,8 @@ layout(set = 0, binding = 0, std140) uniform Frame {
 	float pad6;
 	ivec4 refl_grid; // xy: half resolution size, z: enabled, w: launch index where reflection rays start
 	vec4 refl_params; // x: max traced roughness, y/z: history frames at roughness 0 / max, w: normal power
+	vec4 vox_origin[3]; // tier B clipmap cascades: xyz world min corner, w voxel size
+	ivec4 vox_params; // x: voxels per axis, y: cascades, z: tier B active, w: bounce rays per voxel face
 }
 fr;
 

@@ -74,6 +74,13 @@ class GoghotScreenProbeGI : public godot::CompositorEffect {
 	int fog_max_frames = 32;
 	bool reflections = true;
 	bool deformed_geometry = true; // trace skinned instances in their animated pose (engine patch 2)
+	enum { TRACER_AUTO, TRACER_A, TRACER_B, TRACER_C };
+	int tracer = TRACER_AUTO;
+	int voxel_resolution = 128; // per cascade, 3 cascades x4 apart
+	float voxel_size = 0.125f; // finest cascade
+	int voxel_bounce_rays = 1; // measured: 4 doubles the cost for ~1% FLIP
+	int voxel_cache_max_frames = 8; // tier B: one bounce ray per voxel face, a shorter history converges faster
+	int active_tier = TRACER_C;
 	float reflection_max_roughness = 0.7f;
 	int reflection_min_frames = 8; // measured: 4 flickers (2.1% of pixels), 12 lags
 	int reflection_max_frames = 32;
@@ -168,6 +175,12 @@ public:
 	GOGHOT_PROP(int, fog_max_frames)
 	GOGHOT_PROP(bool, reflections)
 	GOGHOT_PROP(bool, deformed_geometry)
+	GOGHOT_PROP(int, tracer)
+	GOGHOT_PROP(int, voxel_resolution)
+	GOGHOT_PROP(float, voxel_size)
+	GOGHOT_PROP(int, voxel_bounce_rays)
+	GOGHOT_PROP(int, voxel_cache_max_frames)
+	int get_active_tier() const { return active_tier; } // 1 = A, 2 = B, 3 = C
 	GOGHOT_PROP(float, reflection_max_roughness)
 	GOGHOT_PROP(int, reflection_min_frames)
 	GOGHOT_PROP(int, reflection_max_frames)

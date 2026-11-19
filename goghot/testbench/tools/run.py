@@ -111,6 +111,14 @@ def metrics(frames_dir, ref_dir, spec, cap):
             prev = cur
         out["flicker"] = float(np.mean(diffs))
         out["flicker_max"] = float(np.max(diffs))
+        # Split the static hold into true flicker and convergence drift: per pixel linear fit over the
+        # hold; residual std > 1/255 is visible flicker, the fitted change over the hold is drift.
+        frames = np.stack([np.asarray(Image.open(frames_dir / f"frame_{f:04d}.png").convert("L"), dtype=np.float32) for f in range(hold)])
+        t = np.arange(hold, dtype=np.float32) - (hold - 1) / 2.0
+        slope = (frames * t[:, None, None]).sum(0) / (t * t).sum()
+        resid = frames - frames.mean(0) - slope * t[:, None, None]
+        out["flicker_px"] = float((resid.std(0) > 1.0).mean() * 100.0)
+        out["drift"] = float(np.abs(slope).mean() * hold)
 
     # Exposure behaviour: "key" = geometric mean of linear luminance of the final image, per frame.
     keys = []
@@ -208,19 +216,20 @@ def main():
                 sheet.paste(t, (x, 0))
                 x += t.width
             sheet.save(report_dir / name / f"compare_{f:04d}.png")
-        print(f"[{name}] flip={fmt(m.get('flip'))} ssim={fmt(m.get('ssim'))} flicker={fmt(m.get('flicker'), '{:.3f}')} gpu={m['gpu_ms_mean']:.2f}ms goghot={m['goghot_ms']:.3f}ms")
+        print(f"[{name}] flip={fmt(m.get('flip'))} ssim={fmt(m.get('ssim'))} flicker={fmt(m.get('flicker'), '{:.3f}')} flicker_px={fmt(m.get('flicker_px'), '{:.2f}')}% drift={fmt(m.get('drift'), '{:.2f}')} gpu={m['gpu_ms_mean']:.2f}ms goghot={m['goghot_ms']:.3f}ms")
 
     (report_dir / "results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
     lines = [f"# Test bench: {args.tag} ({stamp}), GI `{args.gi}` {args.gi_params}, exposure `{args.exposure}`", "",
              f"Resolution {args.width}x{args.height}, Cycles {args.ref_samples} spp. "
              "Images: `<scene>/compare_NNNN.png` = Godot | Cycles | FLIP.", "",
-             "| scene | FLIP ↓ | SSIM ↑ | flicker ↓ (static, /255) | key mean [min, max] | GPU ms mean / p95 (whole frame) | goghot passes ms |",
-             "|---|---|---|---|---|---|---|"]
+             "| scene | FLIP ↓ | SSIM ↑ | flicker ↓ (static, /255) | flicker px % ↓ (detrended std > 1/255) | drift /255 (over hold) | key mean [min, max] | GPU ms mean / p95 (whole frame) | goghot passes ms |",
+             "|---|---|---|---|---|---|---|---|---|"]
     for name, m in results.items():
         if "error" in m:
-            lines.append(f"| {name} | error: {m['error']} | | | | | |")
+            lines.append(f"| {name} | error: {m['error']} | | | | | | | |")
         else:
             lines.append(f"| {name} | {fmt(m.get('flip'))} | {fmt(m.get('ssim'))} | {fmt(m.get('flicker'), '{:.3f}')} | "
+                         f"{fmt(m.get('flicker_px'), '{:.2f}')} | {fmt(m.get('drift'), '{:.2f}')} | "
                          f"{m['key_mean']:.3f} [{m['key_min']:.3f}, {m['key_max']:.3f}] | "
                          f"{m['gpu_ms_mean']:.2f} / {m['gpu_ms_p95']:.2f} | "
                          + (", ".join(f"{k} {v:.3f}" for k, v in m["pass_ms"].items()) or "—") + " |")
