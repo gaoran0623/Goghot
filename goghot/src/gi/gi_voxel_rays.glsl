@@ -20,16 +20,24 @@ layout(set = 0, binding = 12, std430) restrict buffer ReflRays { ReflRay refl[];
 vec3 shade_voxel_ray(vec3 o, vec3 d, float offset) {
 	ivec3 ht;
 	int hc;
-	float t = vox_trace(o + d * offset, d, 1e4, 0.5, ht, hc);
-	if (t < 0.0) {
-		return fr.sky.rgb;
+	vec3 start = o + d * offset;
+	// A voxel holding only faces that look away from the ray is usually an edge voxel of a thin
+	// surface whose facing side landed in the next voxel (conservative voxelization): step past it
+	// a few times instead of returning black. Rays start off their surface, so this is not the
+	// "started inside geometry" case.
+	for (int k = 0; k < 4; k++) {
+		float t = vox_trace(start, d, 1e4, 0.5, ht, hc);
+		if (t < 0.0) {
+			return fr.sky.rgb;
+		}
+		vec3 hn;
+		int face = vox_face_for_ray(ht, d, hn);
+		if (face >= 0) {
+			return face == 0 ? texelFetch(lit_tex, ht, 0).rgb : texelFetch(lit_neg_tex, ht, 0).rgb;
+		}
+		start += d * (t + vox_size(hc) * 1.01);
 	}
-	vec3 hn;
-	int face = vox_face_for_ray(ht, d, hn);
-	if (face < 0) {
-		return vec3(0.0); // only the back of a surface: the ray started inside geometry
-	}
-	return face == 0 ? texelFetch(lit_tex, ht, 0).rgb : texelFetch(lit_neg_tex, ht, 0).rgb;
+	return vec3(0.0);
 }
 
 void main() {

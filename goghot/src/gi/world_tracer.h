@@ -45,6 +45,21 @@ public:
 	void voxel_update(const godot::RID &p_frame_ubo);
 	void voxel_trace(const godot::RID &p_frame_ubo, const godot::RID &p_probes, const godot::RID &p_rays, const godot::RID &p_counter, const godot::RID &p_fog_rays, const godot::RID &p_refl, uint32_t p_ray_count);
 	void clear_cache();
+	// Debug view: 0 occupancy, 1/2 face normals, 3/4 face lit (the volume the last trace used).
+	godot::RID voxel_debug_texture(int p_which) const {
+		switch (p_which) {
+			case 0:
+				return vox_occ;
+			case 1:
+				return vox_normal[0];
+			case 2:
+				return vox_normal[1];
+			case 3:
+				return vox_lit[0][vox_ping ^ 1];
+			default:
+				return vox_lit[1][vox_ping ^ 1];
+		}
+	}
 
 private:
 	godot::RenderingDevice *rd = nullptr;

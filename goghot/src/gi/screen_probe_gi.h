@@ -30,6 +30,7 @@ class GoghotGIColorCapture;
 class GoghotScreenProbeGI : public godot::CompositorEffect {
 	GDCLASS(GoghotScreenProbeGI, godot::CompositorEffect);
 	friend class GoghotGIColorCapture;
+	friend class GoghotGIDebug;
 
 	enum Pass {
 		PASS_HZB_COPY,
@@ -135,6 +136,8 @@ class GoghotScreenProbeGI : public godot::CompositorEffect {
 	godot::RID _tex(godot::RenderingDevice::DataFormat p_format, const godot::Vector2i &p_size, int p_mips, uint32_t p_usage);
 	void _dispatch(int64_t p_list, Pass p_pass, const godot::TypedArray<godot::RDUniform> &p_uniforms, uint32_t p_x, uint32_t p_y, uint32_t p_z = 1);
 	void _capture_color(godot::RenderSceneBuffersRD *p_rb);
+	void _render_debug(godot::RenderSceneBuffersRD *p_rb, int p_mode);
+	godot::RID debug_shaders[3], debug_pipelines[3];
 
 protected:
 	static void _bind_methods();

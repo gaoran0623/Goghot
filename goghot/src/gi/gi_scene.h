@@ -71,12 +71,17 @@ struct GISceneSnapshot {
 };
 
 // Collects meshes, materials and lights of the scene tree for the world tracer every frame and
-// hands them to its GoghotScreenProbeGI. Phase 3 scope: MeshInstance3D with BaseMaterial3D
-// (albedo / emission colors, textures not sampled yet), DirectionalLight3D and OmniLight3D.
+// hands them to its GoghotScreenProbeGI: MeshInstance3D (BaseMaterial3D albedo / emission / albedo
+// texture / alpha scissor / cull mode, skinned instances), DirectionalLight3D and OmniLight3D.
+// Geometry with gi_mode = Disabled is excluded (it then neither occludes nor bounces light).
+// In the editor it only runs with editor_preview and only collects the edited scene.
 class GoghotGIScene : public godot::Node {
 	GDCLASS(GoghotGIScene, godot::Node);
 
+protected:
 	godot::Ref<GoghotScreenProbeGI> gi;
+	bool editor_preview = false;
+	godot::Node *_scene_root() const;
 	std::unordered_map<uint64_t, std::shared_ptr<const GIMeshCPU>> mesh_cache;
 	struct TextureStats {
 		godot::Color average;
@@ -88,12 +93,13 @@ class GoghotGIScene : public godot::Node {
 	void _collect(godot::Node *p_node, GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index);
 	std::shared_ptr<const GIMeshCPU> _get_mesh(const godot::Ref<godot::Resource> &p_mesh);
 
-protected:
 	static void _bind_methods();
 
 public:
 	void _process(double p_delta) override;
 	void update_now();
+	void set_editor_preview(bool p_enable);
+	bool get_editor_preview() const;
 
 	void set_gi(const godot::Ref<GoghotScreenProbeGI> &p_gi);
 	godot::Ref<GoghotScreenProbeGI> get_gi() const;

@@ -11,6 +11,7 @@
 #include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/classes/directional_light3d.hpp>
 #include <godot_cpp/classes/engine.hpp>
+#include <godot_cpp/classes/geometry_instance3d.hpp>
 #include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/classes/mesh_instance3d.hpp>
 #include <godot_cpp/classes/omni_light3d.hpp>
@@ -147,7 +148,7 @@ GIMaterial GoghotGIScene::_material_of(const Ref<Material> &p_mat) {
 void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index) {
 	if (MeshInstance3D *mi = Object::cast_to<MeshInstance3D>(p_node)) {
 		Ref<Mesh> mesh = mi->get_mesh();
-		if (mi->is_visible_in_tree() && mesh.is_valid()) {
+		if (mi->is_visible_in_tree() && mesh.is_valid() && mi->get_gi_mode() != GeometryInstance3D::GI_MODE_DISABLED) {
 			std::shared_ptr<const GIMeshCPU> m = _get_mesh(mesh);
 			if (m && !m->surfaces.empty()) {
 				auto it = r_mesh_index.find(m->id);
@@ -203,7 +204,11 @@ void GoghotGIScene::update_now() {
 	}
 	auto snap = std::make_shared<GISceneSnapshot>();
 	std::unordered_map<uint64_t, uint32_t> mesh_index;
-	_collect(get_tree()->get_root(), *snap, mesh_index);
+	Node *root = _scene_root();
+	if (root == nullptr) {
+		return;
+	}
+	_collect(root, *snap, mesh_index);
 	uint64_t h = 1469598103934665603ull;
 	for (const auto &m : snap->meshes) {
 		h = (h ^ m->id) * 1099511628211ull;
@@ -230,8 +235,23 @@ void GoghotGIScene::update_now() {
 	gi->set_scene_snapshot(snap);
 }
 
-void GoghotGIScene::_process(double p_delta) {
+Node *GoghotGIScene::_scene_root() const {
 	if (Engine::get_singleton()->is_editor_hint()) {
+		return get_tree()->get_edited_scene_root(); // not the editor's own UI
+	}
+	return get_tree()->get_root();
+}
+
+void GoghotGIScene::set_editor_preview(bool p_enable) {
+	editor_preview = p_enable;
+}
+
+bool GoghotGIScene::get_editor_preview() const {
+	return editor_preview;
+}
+
+void GoghotGIScene::_process(double p_delta) {
+	if (Engine::get_singleton()->is_editor_hint() && !editor_preview) {
 		return;
 	}
 	update_now();
@@ -250,6 +270,9 @@ void GoghotGIScene::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_gi", "gi"), &GoghotGIScene::set_gi);
 	ClassDB::bind_method(D_METHOD("get_gi"), &GoghotGIScene::get_gi);
 	ClassDB::bind_method(D_METHOD("update_now"), &GoghotGIScene::update_now);
+	ClassDB::bind_method(D_METHOD("set_editor_preview", "enable"), &GoghotGIScene::set_editor_preview);
+	ClassDB::bind_method(D_METHOD("get_editor_preview"), &GoghotGIScene::get_editor_preview);
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "editor_preview"), "set_editor_preview", "get_editor_preview");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "gi", PROPERTY_HINT_RESOURCE_TYPE, "GoghotScreenProbeGI"), "set_gi", "get_gi");
 }
 

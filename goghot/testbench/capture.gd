@@ -4,7 +4,7 @@
 #   godot --path goghot/testbench --rendering-driver vulkan --resolution 960x540 \
 #         --script res://capture.gd -- <scene.json> <out_dir>
 #         [gi_mode] [exposure]
-# gi_mode: baseline (flat ambient, default) | inject_identity | inject_red (engine patch 1 checks) | screen_probe (phase 2) | rt (phase 3)
+# gi_mode: baseline (flat ambient, default) | inject_identity | inject_red (engine patch 1 checks) | screen_probe (phase 2) | rt (phase 3) | node (phase 6: GoghotGI node)
 # exposure: fixed (default, exposure 1, comparable to Cycles) | auto (histogram auto exposure, GDScript proto) | auto_cpp (GDExtension)
 #
 # Scene JSON is shared with tools/blender_ref.py so Godot and Cycles build the same scene.
@@ -150,6 +150,12 @@ func _build(root: Node3D) -> void:
 			var scene_node: Node = ClassDB.instantiate("GoghotGIScene")
 			scene_node.gi = gi_effect
 			root.add_child(scene_node)
+	elif gi_mode == "node":
+		# Phase 6: one GoghotGI node does all the wiring (compositor, scene collection, sky).
+		var node: Node = ClassDB.instantiate("GoghotGI")
+		for k in gi_params: # node properties (quality, tracer, debug_view, auto_exposure)
+			node.set(k, gi_params[k])
+		root.add_child(node)
 	elif gi_mode != "baseline":
 		push_error("unknown gi mode " + gi_mode)
 	if exposure_mode == "auto" or exposure_mode == "auto_cpp":

@@ -14,7 +14,9 @@
 
 #include "gi/gi_common.glsl.gen.h"
 #include "gi/gi_copy.glsl.gen.h"
+#include "gi/gi_debug.glsl.gen.h"
 #include "gi/gi_filter.glsl.gen.h"
+#include "gi/gi_voxel_common.glsl.gen.h"
 #include "gi/gi_fog_accumulate.glsl.gen.h"
 #include "gi/gi_gather.glsl.gen.h"
 #include "gi/gi_hzb_copy.glsl.gen.h"
@@ -151,6 +153,23 @@ void GoghotScreenProbeGI::_create_pipelines() {
 	ss->set_mag_filter(RD::SAMPLER_FILTER_LINEAR);
 	linear_sampler = rd->sampler_create(ss);
 	frame_ubo = rd->uniform_buffer_create(sizeof(FrameUBO));
+	for (int i = 0; i < 3; i++) { // debug views
+		String src_str = String("#version 450\n") + String(GI_COMMON_GLSL) + "#define DEBUG_PASS " + itos(i) + "\n";
+		if (i == 2) {
+			src_str += String("#define VOX_OCC_BINDING 6\n#define VOX_NORMAL_BINDING 7\n") + String(GI_VOXEL_COMMON_GLSL);
+		}
+		Ref<RDShaderSource> src;
+		src.instantiate();
+		src->set_stage_source(RD::SHADER_STAGE_COMPUTE, src_str + String(GI_DEBUG_GLSL));
+		Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(src);
+		String err = spirv->get_stage_compile_error(RD::SHADER_STAGE_COMPUTE);
+		if (!err.is_empty()) {
+			UtilityFunctions::push_error("Goghot debug shader ", i, ": ", err);
+			continue;
+		}
+		debug_shaders[i] = rd->shader_create_from_spirv(spirv);
+		debug_pipelines[i] = rd->compute_pipeline_create(debug_shaders[i]);
+	}
 	if (!world.init(rd, String(), String())) {
 		UtilityFunctions::print_verbose("Goghot: hardware ray tracing unavailable, world tracer disabled (screen + sky only).");
 	}
@@ -215,6 +234,12 @@ void GoghotScreenProbeGI::_free_all() {
 	_free_sized();
 	_free_fog();
 	world.free();
+	for (RID &s : debug_shaders) {
+		if (s.is_valid()) {
+			rd->free_rid(s);
+		}
+		s = RID();
+	}
 	for (int i = 0; i < PASS_MAX; i++) {
 		if (shaders[i].is_valid()) {
 			rd->free_rid(shaders[i]);
@@ -606,6 +631,44 @@ void GoghotScreenProbeGI::_capture_color(RenderSceneBuffersRD *p_rb) {
 	rd->compute_list_end();
 	rd->capture_timestamp("goghot_capture_end");
 	prev_color_valid = true;
+}
+
+void GoghotScreenProbeGI::_render_debug(RenderSceneBuffersRD *p_rb, int p_mode) {
+	if (!ready || !probes.is_valid() || p_rb->get_internal_size() != size) {
+		return;
+	}
+	const int pass = p_mode == 3 ? 1 : (p_mode == 4 ? 2 : 0);
+	if (!debug_shaders[pass].is_valid() || (pass == 2 && active_tier != TRACER_B)) {
+		return; // voxel view only exists in tier B
+	}
+	TypedArray<RDUniform> u;
+	u.push_back(uni(RD::UNIFORM_TYPE_UNIFORM_BUFFER, 0, frame_ubo));
+	u.push_back(uni(RD::UNIFORM_TYPE_IMAGE, 1, p_rb->get_color_layer(0)));
+	if (pass == 0) {
+		u.push_back(uni(RD::UNIFORM_TYPE_IMAGE, 2, p_rb->get_texture_slice("rbgi", "ambient", 0, 0, 1, 1)));
+		u.push_back(uni(RD::UNIFORM_TYPE_IMAGE, 3, p_rb->get_texture_slice("rbgi", "reflection", 0, 0, 1, 1)));
+	} else if (pass == 1) {
+		u.push_back(uni(RD::UNIFORM_TYPE_STORAGE_BUFFER, 4, probes));
+		u.push_back(uni(RD::UNIFORM_TYPE_STORAGE_BUFFER, 5, counter));
+	} else {
+		u.push_back(uni(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 6, nearest_sampler, world.voxel_debug_texture(0)));
+		u.push_back(uni(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 7, nearest_sampler, world.voxel_debug_texture(1)));
+		u.push_back(uni(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 8, nearest_sampler, world.voxel_debug_texture(2)));
+		u.push_back(uni(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 9, nearest_sampler, world.voxel_debug_texture(3)));
+		u.push_back(uni(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 10, nearest_sampler, world.voxel_debug_texture(4)));
+	}
+	const int64_t cl = rd->compute_list_begin();
+	rd->compute_list_bind_compute_pipeline(cl, debug_pipelines[pass]);
+	rd->compute_list_bind_uniform_set(cl, UniformSetCacheRD::get_cache(debug_shaders[pass], 0, u), 0);
+	PackedInt32Array pc;
+	pc.resize(4);
+	pc.fill(0);
+	pc[0] = p_mode;
+	PackedByteArray pcb = pc.to_byte_array();
+	rd->compute_list_set_push_constant(cl, pcb, pcb.size());
+	const uint32_t n = pass == 1 ? uint32_t(probe_grid.x * probe_grid.y + max_adaptive) : uint32_t(size.x * size.y);
+	rd->compute_list_dispatch(cl, (n + 63) / 64, 1, 1);
+	rd->compute_list_end();
 }
 
 Ref<GoghotGIColorCapture> GoghotScreenProbeGI::create_color_capture() {
