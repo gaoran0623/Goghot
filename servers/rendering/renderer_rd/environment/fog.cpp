@@ -795,7 +795,11 @@ void Fog::volumetric_fog_update(const VolumetricFogSettings &p_settings, const P
 		RD::get_singleton()->compute_list_end();
 	}
 
-	bool gi_dependent_sets_valid = fog->sync_gi_dependent_sets_validity();
+	RID gi_volume = RendererSceneRenderRD::get_singleton()->environment_get_volumetric_fog_gi_volume(p_settings.env);
+	if (gi_volume.is_valid() && !RD::get_singleton()->texture_is_valid(gi_volume)) {
+		gi_volume = RID();
+	}
+	bool gi_dependent_sets_valid = fog->sync_gi_dependent_sets_validity(gi_volume != fog->gi_volume_bound);
 	if (!fog->copy_uniform_set.is_null() && !RD::get_singleton()->uniform_set_is_valid(fog->copy_uniform_set)) {
 		fog->copy_uniform_set = RID();
 	}
@@ -1006,6 +1010,15 @@ void Fog::volumetric_fog_update(const VolumetricFogSettings &p_settings, const P
 			copy_uniforms.push_back(u);
 		}
 
+		{
+			RD::Uniform u;
+			u.uniform_type = RD::UNIFORM_TYPE_TEXTURE;
+			u.binding = 22;
+			u.append_id(gi_volume.is_valid() ? gi_volume : texture_storage->texture_rd_get_default(RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_3D_BLACK));
+			uniforms.push_back(u);
+			fog->gi_volume_bound = gi_volume;
+		}
+
 		if (fog->copy_uniform_set.is_valid() && RD::get_singleton()->uniform_set_is_valid(fog->copy_uniform_set)) {
 			RD::get_singleton()->free_rid(fog->copy_uniform_set);
 		}
@@ -1140,6 +1153,8 @@ void Fog::volumetric_fog_update(const VolumetricFogSettings &p_settings, const P
 
 	params.use_temporal_reprojection = RendererSceneRenderRD::get_singleton()->environment_get_volumetric_fog_temporal_reprojection(p_settings.env);
 	params.temporal_blend = RendererSceneRenderRD::get_singleton()->environment_get_volumetric_fog_temporal_reprojection_amount(p_settings.env);
+
+	params.gi_volume_half_extent = gi_volume.is_valid() ? RendererSceneRenderRD::get_singleton()->environment_get_volumetric_fog_gi_volume_half_extent(p_settings.env) : 0.0f;
 
 	RID sky_rid = RendererSceneRenderRD::get_singleton()->environment_get_sky(p_settings.env);
 	if (sky_rid.is_valid()) {

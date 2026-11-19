@@ -551,6 +551,25 @@ float RendererEnvironmentStorage::environment_get_volumetric_fog_ambient_inject(
 	return env->volumetric_fog_ambient_inject;
 }
 
+void RendererEnvironmentStorage::environment_set_volumetric_fog_gi_volume(RID p_env, RID p_rd_texture, float p_half_extent) {
+	Environment *env = environment_owner.get_or_null(p_env);
+	ERR_FAIL_NULL(env);
+	env->volumetric_fog_gi_volume = p_rd_texture;
+	env->volumetric_fog_gi_volume_half_extent = p_half_extent;
+}
+
+RID RendererEnvironmentStorage::environment_get_volumetric_fog_gi_volume(RID p_env) const {
+	Environment *env = environment_owner.get_or_null(p_env);
+	ERR_FAIL_NULL_V(env, RID());
+	return env->volumetric_fog_gi_volume;
+}
+
+float RendererEnvironmentStorage::environment_get_volumetric_fog_gi_volume_half_extent(RID p_env) const {
+	Environment *env = environment_owner.get_or_null(p_env);
+	ERR_FAIL_NULL_V(env, 0.0);
+	return env->volumetric_fog_gi_volume_half_extent;
+}
+
 // GLOW
 
 void RendererEnvironmentStorage::environment_set_glow(RID p_env, bool p_enable, Vector<float> p_levels, float p_intensity, float p_strength, float p_mix, float p_bloom_threshold, RSE::EnvironmentGlowBlendMode p_blend_mode, float p_hdr_bleed_threshold, float p_hdr_bleed_scale, float p_hdr_luminance_cap, float p_glow_map_strength, RID p_glow_map) {

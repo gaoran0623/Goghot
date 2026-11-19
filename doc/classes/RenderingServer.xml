@@ -1573,6 +1573,15 @@
 				Sets the variables to be used with the volumetric fog post-process effect. See [Environment] for more details.
 			</description>
 		</method>
+		<method name="environment_set_volumetric_fog_gi_volume">
+			<return type="void" />
+			<param index="0" name="env" type="RID" />
+			<param index="1" name="rd_texture" type="RID" />
+			<param index="2" name="half_extent" type="float" />
+			<description>
+				Sets an external global illumination volume for volumetric fog (Forward+ only). [param rd_texture] is a [RenderingDevice] 3D texture holding the mean incident radiance (linear, [code]rgb[/code]) in a world-aligned cube of half size [param half_extent] centered on the camera. Inside the cube it replaces the flat ambient light injection (scaled by [member Environment.volumetric_fog_ambient_inject]); outside it the usual ambient is used. Pass an invalid [RID] or [code]0.0[/code] to disable.
+			</description>
+		</method>
 		<method name="environment_set_volumetric_fog_filter_active">
 			<return type="void" />
 			<param index="0" name="active" type="bool" />

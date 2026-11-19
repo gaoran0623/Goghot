@@ -390,6 +390,18 @@ float RendererSceneRender::environment_get_volumetric_fog_ambient_inject(RID p_e
 	return environment_storage.environment_get_volumetric_fog_ambient_inject(p_env);
 }
 
+void RendererSceneRender::environment_set_volumetric_fog_gi_volume(RID p_env, RID p_rd_texture, float p_half_extent) {
+	environment_storage.environment_set_volumetric_fog_gi_volume(p_env, p_rd_texture, p_half_extent);
+}
+
+RID RendererSceneRender::environment_get_volumetric_fog_gi_volume(RID p_env) const {
+	return environment_storage.environment_get_volumetric_fog_gi_volume(p_env);
+}
+
+float RendererSceneRender::environment_get_volumetric_fog_gi_volume_half_extent(RID p_env) const {
+	return environment_storage.environment_get_volumetric_fog_gi_volume_half_extent(p_env);
+}
+
 // GLOW
 
 void RendererSceneRender::environment_set_glow(RID p_env, bool p_enable, Vector<float> p_levels, float p_intensity, float p_strength, float p_mix, float p_bloom_threshold, RSE::EnvironmentGlowBlendMode p_blend_mode, float p_hdr_bleed_threshold, float p_hdr_bleed_scale, float p_hdr_luminance_cap, float p_glow_map_strength, RID p_glow_map) {

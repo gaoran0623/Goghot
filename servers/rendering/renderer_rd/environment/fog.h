@@ -183,7 +183,8 @@ private:
 			float temporal_blend;
 
 			float sky_border_size[2];
-			float pad[2];
+			float gi_volume_half_extent; // > 0: sample gi_volume_texture instead of flat ambient
+			float pad;
 
 			float cam_rotation[12];
 			float to_prev_view[16];
@@ -319,6 +320,7 @@ public:
 
 		RID fog_uniform_set;
 		RID copy_uniform_set;
+		RID gi_volume_bound; // External GI volume bound in the process uniform sets.
 
 		struct {
 			RID process_uniform_set_density;

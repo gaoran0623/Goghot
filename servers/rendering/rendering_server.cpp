@@ -3105,6 +3105,7 @@ void RenderingServer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("environment_set_sdfgi_frames_to_update_light", "frames"), &RenderingServer::environment_set_sdfgi_frames_to_update_light);
 	ClassDB::bind_method(D_METHOD("environment_set_volumetric_fog_volume_size", "size", "depth"), &RenderingServer::environment_set_volumetric_fog_volume_size);
 	ClassDB::bind_method(D_METHOD("environment_set_volumetric_fog_filter_active", "active"), &RenderingServer::environment_set_volumetric_fog_filter_active);
+	ClassDB::bind_method(D_METHOD("environment_set_volumetric_fog_gi_volume", "env", "rd_texture", "half_extent"), &RenderingServer::environment_set_volumetric_fog_gi_volume);
 
 	ClassDB::bind_method(D_METHOD("environment_bake_panorama", "environment", "bake_irradiance", "size"), &RenderingServer::environment_bake_panorama);
 

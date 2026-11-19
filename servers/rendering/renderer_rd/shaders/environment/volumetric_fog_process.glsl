@@ -185,7 +185,8 @@ layout(set = 0, binding = 15, std140) uniform Params {
 	float temporal_blend;
 
 	vec2 sky_border_size;
-	vec2 pad;
+	float gi_volume_half_extent;
+	float pad;
 
 	mat3x4 cam_rotation;
 	mat4 to_prev_view;
@@ -195,6 +196,8 @@ layout(set = 0, binding = 15, std140) uniform Params {
 params;
 #ifndef MODE_COPY
 layout(set = 0, binding = 16) uniform texture3D prev_density_texture;
+// External GI (environment_set_volumetric_fog_gi_volume): mean incident radiance in a camera-centered cube.
+layout(set = 0, binding = 22) uniform texture3D gi_volume_texture;
 
 #ifdef NO_IMAGE_ATOMICS
 layout(set = 0, binding = 17) buffer density_only_map_buffer {
@@ -441,7 +444,10 @@ void main() {
 		}
 
 		// Compute light from sky
-		if (params.ambient_inject > 0.0) {
+		vec3 gi_volume_uvw = (mat3(params.cam_rotation) * view_pos) / (2.0 * max(params.gi_volume_half_extent, 1e-6)) + 0.5;
+		if (params.gi_volume_half_extent > 0.0 && all(greaterThanEqual(gi_volume_uvw, vec3(0.0))) && all(lessThanEqual(gi_volume_uvw, vec3(1.0)))) {
+			total_light += textureLod(sampler3D(gi_volume_texture, linear_sampler), gi_volume_uvw, 0.0).rgb * params.ambient_inject;
+		} else if (params.ambient_inject > 0.0) {
 			vec3 isotropic = vec3(0.0);
 			vec3 anisotropic = vec3(0.0);
 			if (params.sky_contribution > 0.0) {
