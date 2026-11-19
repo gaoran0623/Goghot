@@ -1,9 +1,9 @@
-"""Editor preview check: opens a scene in the Godot editor (with GoghotGI.editor_preview), waits, saves
-the editor's 3D viewport to a PNG and quits.
+"""Editor preview check: opens addons/goghot_editor_shot/shot.tscn (the demo scene with GoghotGI.editor_preview
+on, plus a @tool node) in the Godot editor; the node waits, saves the editor's 3D viewport to a PNG and quits.
 
-    python goghot/testbench/tools/editor_shot.py --godot <editor binary> [--scene res://demo/gi_demo.tscn] --out shot.png
+    python goghot/testbench/tools/editor_shot.py --godot <editor binary> --out shot.png [--frames 600]
 
-Enables addons/goghot_editor_shot through a temporary override.cfg (removed afterwards).
+The editor log goes next to the PNG (<out>.log).
 """
 
 import argparse
@@ -18,19 +18,23 @@ BENCH = Path(__file__).resolve().parents[1]
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--godot", required=True)
-    ap.add_argument("--scene", default="res://demo/gi_demo.tscn")
     ap.add_argument("--out", required=True)
     ap.add_argument("--frames", type=int, default=600)
+    ap.add_argument("--timeout", type=float, default=600)
+    ap.add_argument("--no-preview", action="store_true", help="comparison shot with GoghotGI.editor_preview off")
     args = ap.parse_args()
-    override = BENCH / "override.cfg"
-    override.write_text('[editor_plugins]\nenabled=PackedStringArray("res://addons/goghot_editor_shot/plugin.cfg")\n', encoding="utf-8")
-    env = dict(os.environ, GOGHOT_SHOT_SCENE=args.scene, GOGHOT_SHOT_OUT=str(Path(args.out).resolve()), GOGHOT_SHOT_FRAMES=str(args.frames))
-    try:
-        rc = subprocess.run([args.godot, "--editor", "--path", str(BENCH), "--rendering-driver", "vulkan"], env=env, timeout=600).returncode
-    finally:
-        override.unlink(missing_ok=True)
-    print("editor exited", rc, "->", args.out if Path(args.out).exists() else "no image")
-    return 0 if Path(args.out).exists() else 1
+    godot = str(Path(args.godot).resolve())
+    out = Path(args.out).resolve()
+    out.unlink(missing_ok=True)
+    env = dict(os.environ, GOGHOT_SHOT_OUT=str(out), GOGHOT_SHOT_FRAMES=str(args.frames), GOGHOT_SHOT_PREVIEW="0" if args.no_preview else "1")
+    with open(out.with_suffix(".log"), "w", encoding="utf-8", errors="replace") as log:
+        try:
+            rc = subprocess.run([godot, "--editor", "--path", str(BENCH), "--rendering-driver", "vulkan", "res://addons/goghot_editor_shot/shot.tscn"],
+                                env=env, timeout=args.timeout, stdout=log, stderr=subprocess.STDOUT).returncode
+        except subprocess.TimeoutExpired:
+            rc = "timeout"
+    print("editor exited", rc, "->", out if out.exists() else "no image")
+    return 0 if out.exists() else 1
 
 
 if __name__ == "__main__":

@@ -87,7 +87,7 @@ vec3 face_lit(ivec3 t, vec3 p, float size, vec3 n, vec3 albedo, vec3 emission) {
 		if (th >= 0.0) {
 			vec3 hn;
 			int face = vox_face_for_ray(ht, dir, hn);
-			s = face < 0 ? vec3(0.0) : (face == 0 ? texelFetch(lit_prev, ht, 0).rgb : texelFetch(lit_prev_neg, ht, 0).rgb);
+			s = face < 0 ? max(texelFetch(lit_prev, ht, 0).rgb, texelFetch(lit_prev_neg, ht, 0).rgb) : (face == 0 ? texelFetch(lit_prev, ht, 0).rgb : texelFetch(lit_prev_neg, ht, 0).rgb);
 		}
 		incoming += s;
 	}

@@ -1,0 +1,11 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="PackedScene" path="res://demo/gi_demo.tscn" id="1"]
+[ext_resource type="Script" path="res://addons/goghot_editor_shot/shot_node.gd" id="2"]
+
+[node name="Shot" type="Node3D"]
+
+[node name="Demo" parent="." instance=ExtResource("1")]
+
+[node name="ShotNode" type="Node" parent="."]
+script = ExtResource("2")
