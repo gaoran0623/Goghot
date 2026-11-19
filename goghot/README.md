@@ -13,7 +13,7 @@ into your project, then **add one `GoghotGI` node to the scene**. That is all:
 - it collects the scene for the world tracer: `MeshInstance3D` (static, alpha-tested, skinned),
   `MultiMeshInstance3D`, CSG root shapes, `GridMap` cells; `BaseMaterial3D` albedo / emission colors and
   textures, alpha scissor / hash, alpha blending (glass: rays pass with probability 1 - alpha), cull mode;
-  `DirectionalLight3D`, `OmniLight3D`, `SpotLight3D` (objects with `cast_shadow` Off do not block shadow rays);
+  `DirectionalLight3D`, `OmniLight3D`, `SpotLight3D`, `AreaLight3D` (sampled rectangle, soft shadows) (objects with `cast_shadow` Off do not block shadow rays);
 - the sky for rays that miss comes from the active `Environment`: Panorama and Procedural skies as
   directional (L2 SH) radiance, other skies / colors uniform;
 - light units follow the project: physical light units (lux / lumens, color temperature, emission and
@@ -34,7 +34,7 @@ into your project, then **add one `GoghotGI` node to the scene**. That is all:
 - Requirements / limits: Forward+, Vulkan, single view (no XR), no MSAA; GI affects opaque geometry,
   reflections and volumetric fog, not transparent materials themselves. `ShaderMaterial` surfaces are
   seen as grey by the world tracer (no surface cache), custom sky shaders as a uniform estimate,
-  `AreaLight3D` is not traced. See `reports/PHASE*.md` for measured quality and cost and their known
+  area light textures are ignored. See `reports/PHASE*.md` for measured quality and cost and their known
   limitations.
 
 | path | what |

@@ -55,7 +55,7 @@
 5. B 档体素追踪器、C 档回退
 6. 易用性：一个节点启用、画质预设、编辑器预览、per-object 排除 GI、调试视图
 7. 实用化（1.0，2026-11-19 定）：
-   - 内容覆盖：SpotLight3D、MultiMeshInstance3D、CSG、GridMap、自发光贴图、Panorama 天空、物理灯光单位
+   - 内容覆盖：SpotLight3D、AreaLight3D、MultiMeshInstance3D、CSG、GridMap、自发光贴图、Panorama 天空、物理灯光单位
    - 测试台补齐：玻璃/半透明、聚光灯 + MultiMesh 植被、动态场景（刚体移动/开关灯/增删物体）、大场景；运动拖影指标；30 分钟长跑显存不增长
    - 验收：所有场景 lum_ratio 在 0.85–1.15；A 档每个场景不输最好的原生 Godot GI；flicker_px < 0.5%；编辑器预览目视确认
    - 硬件：RTX 3060 级 1080p A 档 ≤ 4 ms、B 档在无 RT 显卡实测（需人工提供硬件，未测如实写）
