@@ -301,8 +301,12 @@ func _build(root: Node3D) -> void:
 	elif gi_mode == "node":
 		# Phase 6: one GoghotGI node does all the wiring (compositor, scene collection, sky).
 		var node: Node = ClassDB.instantiate("GoghotGI")
-		for k in gi_params: # node properties (quality, tracer, debug_view, auto_exposure)
-			node.set(k, gi_params[k])
+		var node_props := node.get_property_list().map(func(p): return p.name)
+		for k in gi_params: # node properties (quality, tracer, ...), else properties of its GoghotScreenProbeGI
+			if k in node_props:
+				node.set(k, gi_params[k])
+			else:
+				node.get_effect().set(k, gi_params[k])
 		root.add_child(node)
 	elif gi_mode == "godot_ssil":
 		env.ssil_enabled = true

@@ -69,7 +69,7 @@ class GoghotScreenProbeGI : public godot::CompositorEffect {
 	bool world_tracing = true;
 	float cache_min_cell = 0.05f;
 	float cache_cell_scale = 0.02f;
-	int cache_max_frames = 16; // measured: 32 converges multi-bounce too slowly, 8 flickers more
+	int cache_max_frames = 4; // phase 7 (16 scenes): 4 converges multi-bounce and follows light changes far faster than 16 (cornell 0.091 -> 0.059, dynamic 0.163 -> 0.100), frame-to-frame noise +10-20% but invisible (flicker_px 0)
 	int cache_mature_frames = 8;
 	bool fog_gi = true; // feed volumetric fog (engine patch 3) when the environment has it enabled
 	int fog_resolution = 32;
@@ -82,7 +82,7 @@ class GoghotScreenProbeGI : public godot::CompositorEffect {
 	int voxel_resolution = 128; // per cascade, 3 cascades x4 apart
 	float voxel_size = 0.125f; // finest cascade
 	int voxel_bounce_rays = 1; // measured: 4 doubles the cost for ~1% FLIP
-	int voxel_cache_max_frames = 8; // tier B: one bounce ray per voxel face, a shorter history converges faster
+	int voxel_cache_max_frames = 4; // tier B: one bounce ray per voxel face; phase 7: 4 better than 8 in 12 of 16 scenes
 	int active_tier = TRACER_C;
 	float reflection_max_roughness = 0.7f;
 	int reflection_min_frames = 8; // measured: 4 flickers (2.1% of pixels), 12 lags

@@ -10,8 +10,14 @@ into your project, then **add one `GoghotGI` node to the scene**. That is all:
 - it adds the GI effects to the Compositor of the scene's `WorldEnvironment` (creating the Compositor
   if needed; falls back to the current `Camera3D` without a WorldEnvironment) and removes them again
   when the node leaves the tree;
-- it collects meshes (static, alpha-tested, skinned), materials and lights for the world tracer;
-- the sky radiance for rays that miss is derived from the active `Environment`.
+- it collects the scene for the world tracer: `MeshInstance3D` (static, alpha-tested, skinned),
+  `MultiMeshInstance3D`, CSG root shapes, `GridMap` cells; `BaseMaterial3D` albedo / emission colors and
+  textures, alpha scissor / hash, alpha blending (glass: rays pass with probability 1 - alpha), cull mode;
+  `DirectionalLight3D`, `OmniLight3D`, `SpotLight3D` (objects with `cast_shadow` Off do not block shadow rays);
+- the sky for rays that miss comes from the active `Environment`: Panorama and Procedural skies as
+  directional (L2 SH) radiance, other skies / colors uniform;
+- light units follow the project: physical light units (lux / lumens, color temperature, emission and
+  background intensity, camera exposure normalization) work like the default units.
 
 | `GoghotGI` property | |
 |---|---|
@@ -26,8 +32,10 @@ into your project, then **add one `GoghotGI` node to the scene**. That is all:
 - Every parameter of the effect stays reachable through `get_effect()` (`GoghotScreenProbeGI`).
 - Example scene: `testbench/demo/gi_demo.tscn`.
 - Requirements / limits: Forward+, Vulkan, single view (no XR), no MSAA; GI affects opaque geometry,
-  reflections and volumetric fog, not transparent materials. See `reports/PHASE*.md` for measured
-  quality and cost and their known limitations.
+  reflections and volumetric fog, not transparent materials themselves. `ShaderMaterial` surfaces are
+  seen as grey by the world tracer (no surface cache), custom sky shaders as a uniform estimate,
+  `AreaLight3D` is not traced. See `reports/PHASE*.md` for measured quality and cost and their known
+  limitations.
 
 | path | what |
 |---|---|
@@ -61,5 +69,8 @@ Python deps: `scons zstandard numpy pillow scikit-image flip-evaluator`. Blender
 Reference metrics: `flip` (perceptual difference vs Cycles), `flip_norm` (FLIP after scaling the image to the reference's mean
 luminance: structure errors such as leaks, occlusion and color bleeding, without the overall brightness bias) and `lum_ratio`
 (mean luminance / reference: the brightness bias itself). Cycles is the physically based target, not a look to match pixel
-for pixel; temporal metrics (`flicker_px`, `drift`) and GPU time matter as much. `godot_*` GI modes are native Godot GI with
+for pixel; temporal metrics (`flicker_px`, `drift`, `ghost` = in-motion frames vs the same state rendered
+converged) and GPU time matter as much. `--units physical` runs a scene with physical light units (same
+expected images), `--soak SECONDS` loops it and logs video memory, `tools/editor_shot.py` saves the editor
+viewport of the demo scene (editor preview check). `godot_*` GI modes are native Godot GI with
 default settings, for comparison.
