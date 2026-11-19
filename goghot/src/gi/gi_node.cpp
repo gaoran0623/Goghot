@@ -421,6 +421,9 @@ void GoghotGI::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_print_stats", "enable"), &GoghotGI::set_print_stats);
 	ClassDB::bind_method(D_METHOD("get_print_stats"), &GoghotGI::get_print_stats);
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "print_stats"), "set_print_stats", "get_print_stats");
+	ClassDB::bind_method(D_METHOD("set_deformed_blas_cache", "enable"), &GoghotGI::set_deformed_blas_cache);
+	ClassDB::bind_method(D_METHOD("get_deformed_blas_cache"), &GoghotGI::get_deformed_blas_cache);
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "deformed_blas_cache"), "set_deformed_blas_cache", "get_deformed_blas_cache");
 }
 
 } // namespace goghot

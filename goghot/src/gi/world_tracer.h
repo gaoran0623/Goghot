@@ -118,6 +118,13 @@ private:
 	uint32_t deformed_cursor = 0; // round robin start of the BLAS rebuild budget
 	std::vector<godot::Ref<godot::RDAccelerationStructureInstance>> inst_pool;
 	uint32_t deformed_triangle_budget = 250000; // deformed BLAS triangles rebuilt per frame (round robin)
+	bool deformed_blas_cache = true; // false: one BLAS per deformed instance, recreated on buffer swaps and rebuilt every frame (pre-cache behavior)
+public:
+	void set_deformed_blas_cache(bool p_enable, uint32_t p_budget) {
+		deformed_blas_cache = p_enable;
+		deformed_triangle_budget = p_budget;
+	}
+private:
 	std::vector<DeformedGPU> deformed;
 	std::unordered_set<uint64_t> alive_deformed; // deformed instances present in the next snapshot
 	std::unordered_map<uint64_t, size_t> deformed_by_instance;

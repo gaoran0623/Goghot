@@ -103,6 +103,8 @@ public:
 	bool get_sky_from_environment() const { return sky_from_environment; }
 	godot::Ref<GoghotScreenProbeGI> get_effect() const { return gi; }
 	void set_print_stats(bool p_enable) { print_stats = p_enable; }
+	void set_deformed_blas_cache(bool p_enable) { gi->set_deformed_blas_cache(p_enable); }
+	bool get_deformed_blas_cache() const { return gi->get_deformed_blas_cache(); }
 	bool get_print_stats() const { return print_stats; }
 
 	GoghotGI();

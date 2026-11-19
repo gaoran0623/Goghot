@@ -394,6 +394,7 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 	// Tracer tier: A = hardware RT, B = voxels, C = none (screen + sky). Auto picks A when supported.
 	const int requested = tracer == TRACER_AUTO ? (world.is_rt_supported() ? TRACER_A : TRACER_B) : tracer;
 	const bool tier_b = requested == TRACER_B || (requested == TRACER_A && !world.is_rt_supported());
+	world.set_deformed_blas_cache(deformed_blas_cache, uint32_t(MAX(deformed_triangle_budget, 1)));
 	const bool world_active = world_tracing && requested != TRACER_C && world.is_ready() && scene &&
 			world.update_scene(*scene, deformed_geometry, tier_b ? GIWorldTracer::TIER_B_VOXEL : GIWorldTracer::TIER_A_RT);
 	active_tier = !world_active ? TRACER_C : (tier_b ? TRACER_B : TRACER_A);
@@ -749,6 +750,8 @@ void GoghotScreenProbeGI::_bind_methods() {
 	GOGHOT_BIND(Variant::COLOR, sky_color, PROPERTY_HINT_NONE, "")
 	GOGHOT_BIND(Variant::FLOAT, sky_energy, PROPERTY_HINT_RANGE, "0,16,0.01")
 	GOGHOT_BIND(Variant::PACKED_COLOR_ARRAY, sky_sh, PROPERTY_HINT_NONE, "")
+	GOGHOT_BIND(Variant::BOOL, deformed_blas_cache, PROPERTY_HINT_NONE, "")
+	GOGHOT_BIND(Variant::INT, deformed_triangle_budget, PROPERTY_HINT_RANGE, "10000,4000000,1000")
 	GOGHOT_BIND(Variant::INT, debug_mode, PROPERTY_HINT_ENUM, "Off,No Temporal,No Spatial Filter")
 	GOGHOT_BIND(Variant::BOOL, world_tracing, PROPERTY_HINT_NONE, "")
 	GOGHOT_BIND(Variant::FLOAT, cache_min_cell, PROPERTY_HINT_RANGE, "0.005,1,0.005,suffix:m")

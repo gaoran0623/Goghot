@@ -375,8 +375,17 @@ void GIWorldTracer::_update_deformed(const GISceneSnapshot &p_snap, bool p_rt) {
 			d.sources = src;
 		} else {
 			int slot = d.slot_src[0] == src && d.slot_blas[0].is_valid() ? 0 : (d.slot_src[1] == src && d.slot_blas[1].is_valid() ? 1 : -1);
+			if (!deformed_blas_cache && slot < 0) {
+				slot = 0; // single BLAS: recreated whenever the buffers change (as before the cache)
+				d.next_evict = 0;
+			} else if (!deformed_blas_cache) {
+				slot = 0;
+			}
+			if (!deformed_blas_cache && d.slot_src[0] != src) {
+				slot = -1;
+			}
 			if (slot < 0) { // a buffer not seen yet: (re)create a BLAS over it, built this frame
-				slot = !d.slot_blas[0].is_valid() ? 0 : (!d.slot_blas[1].is_valid() ? 1 : int(d.next_evict));
+				slot = !deformed_blas_cache ? 0 : (!d.slot_blas[0].is_valid() ? 0 : (!d.slot_blas[1].is_valid() ? 1 : int(d.next_evict)));
 				d.next_evict = uint32_t(slot ^ 1);
 				if (d.slot_blas[slot].is_valid()) {
 					rd->free_rid(d.slot_blas[slot]);
@@ -399,7 +408,7 @@ void GIWorldTracer::_update_deformed(const GISceneSnapshot &p_snap, bool p_rt) {
 				d.slot_blas[slot] = rd->blas_create(geoms, RD::ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT);
 				d.slot_src[slot] = src;
 			} else {
-				build = built == 0 || budget_used + d.triangles <= deformed_triangle_budget;
+				build = !deformed_blas_cache || built == 0 || budget_used + d.triangles <= deformed_triangle_budget;
 			}
 			d.blas = d.slot_blas[slot];
 			d.sources = src;

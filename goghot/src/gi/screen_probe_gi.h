@@ -64,7 +64,9 @@ class GoghotScreenProbeGI : public godot::CompositorEffect {
 	bool jitter_probes = false; // measured: jitter adds flicker and does not improve accuracy
 	godot::Color sky_color = godot::Color(0, 0, 0);
 	float sky_energy = 1.0f;
-	godot::PackedColorArray sky_sh; // 9 L2 SH coefficients of the sky radiance (linear, world), empty = uniform sky_color
+	godot::PackedColorArray sky_sh;
+	bool deformed_blas_cache = true; // see GIWorldTracer
+	int deformed_triangle_budget = 250000; // 9 L2 SH coefficients of the sky radiance (linear, world), empty = uniform sky_color
 	int debug_mode = 0;
 	bool world_tracing = true;
 	float cache_min_cell = 0.05f;
@@ -169,6 +171,8 @@ public:
 	GOGHOT_PROP(godot::Color, sky_color)
 	GOGHOT_PROP(float, sky_energy)
 	GOGHOT_PROP(godot::PackedColorArray, sky_sh)
+	GOGHOT_PROP(bool, deformed_blas_cache)
+	GOGHOT_PROP(int, deformed_triangle_budget)
 	GOGHOT_PROP(int, debug_mode)
 	GOGHOT_PROP(bool, world_tracing)
 	GOGHOT_PROP(float, cache_min_cell)
