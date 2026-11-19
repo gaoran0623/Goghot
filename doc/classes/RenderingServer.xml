@@ -1884,6 +1884,14 @@
 				Once finished with your RID, you will want to free the RID using the RenderingServer's [method free_rid] method. This is a shorthand for using [method instance_create] and setting the base and scenario manually.
 			</description>
 		</method>
+		<method name="instance_surface_get_vertex_buffer_rd_rid" qualifiers="const">
+			<return type="RID" />
+			<param index="0" name="instance" type="RID" />
+			<param index="1" name="surface" type="int" />
+			<description>
+				Returns the [RenderingDevice] vertex buffer used to draw [param surface] of the mesh [param instance] this frame. For skinned or blend shape deformed instances this is the instance's own deformed buffer (positions as 3 floats per vertex, followed by the packed normals and tangents), otherwise the mesh's buffer (see [method mesh_surface_get_vertex_buffer_rd_rid]). On devices with ray tracing, deformed buffers can be used as acceleration structure build input. The deformed buffer can change between frames when motion vectors are in use, so query it every frame.
+			</description>
+		</method>
 		<method name="instance_geometry_get_shader_parameter" qualifiers="const">
 			<return type="Variant" />
 			<param index="0" name="instance" type="RID" />

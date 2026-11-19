@@ -1090,8 +1090,20 @@ void MeshStorage::_mesh_instance_add_surface(MeshInstance *mi, Mesh *mesh, uint3
 	mi->dirty = true;
 }
 
+RID MeshStorage::mesh_instance_get_surface_vertex_buffer_rd_rid(RID p_mesh_instance, int p_surface) const {
+	MeshInstance *mi = mesh_instance_owner.get_or_null(p_mesh_instance);
+	ERR_FAIL_NULL_V(mi, RID());
+	ERR_FAIL_UNSIGNED_INDEX_V((uint32_t)p_surface, mi->surfaces.size(), RID());
+	return mi->surfaces[p_surface].vertex_buffer[mi->surfaces[p_surface].current_buffer];
+}
+
 void MeshStorage::_mesh_instance_add_surface_buffer(MeshInstance *mi, Mesh *mesh, MeshInstance::Surface *s, uint32_t p_surface, uint32_t p_buffer_index) {
-	s->vertex_buffer[p_buffer_index] = RD::get_singleton()->vertex_buffer_create(mesh->surfaces[p_surface]->vertex_buffer_size, Vector<uint8_t>(), RD::BUFFER_CREATION_AS_STORAGE_BIT);
+	BitField<RD::BufferCreationBits> creation_bits = RD::BUFFER_CREATION_AS_STORAGE_BIT;
+	if (RD::get_singleton()->has_feature(RD::SUPPORTS_RAYTRACING_PIPELINE) || RD::get_singleton()->has_feature(RD::SUPPORTS_RAY_QUERY)) {
+		// Deformed vertices can be ray traced (BLAS input), see instance_surface_get_vertex_buffer_rd_rid().
+		creation_bits.set_flag(RD::BUFFER_CREATION_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT);
+	}
+	s->vertex_buffer[p_buffer_index] = RD::get_singleton()->vertex_buffer_create(mesh->surfaces[p_surface]->vertex_buffer_size, Vector<uint8_t>(), creation_bits);
 
 	Vector<RD::Uniform> uniforms;
 	{

@@ -1602,6 +1602,19 @@ void RendererSceneCull::instance_geometry_set_shader_parameter(RID p_instance, c
 	instance->instance_uniforms.set(instance->self, p_parameter, p_value);
 }
 
+RID RendererSceneCull::instance_surface_get_vertex_buffer_rd_rid(RID p_instance, int p_surface) const {
+	const Instance *instance = instance_owner.get_or_null(p_instance);
+	ERR_FAIL_NULL_V(instance, RID());
+	if (instance->base_type != RSE::INSTANCE_MESH) {
+		return RID();
+	}
+	if (instance->mesh_instance.is_valid()) {
+		// Skinned / blend shape deformed: the instance's own (current) vertex buffer.
+		return RSG::mesh_storage->mesh_instance_get_surface_vertex_buffer_rd_rid(instance->mesh_instance, p_surface);
+	}
+	return RSG::mesh_storage->mesh_surface_get_vertex_buffer_rd_rid(instance->base, p_surface);
+}
+
 Variant RendererSceneCull::instance_geometry_get_shader_parameter(RID p_instance, const StringName &p_parameter) const {
 	const Instance *instance = instance_owner.get_or_null(p_instance);
 	ERR_FAIL_NULL_V(instance, Variant());
