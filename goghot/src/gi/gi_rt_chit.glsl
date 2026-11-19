@@ -12,9 +12,14 @@ void main() {
 	uint i2 = indices[base + 2u] + g.vertex_base;
 	vec3 n = normals[i0].xyz * (1.0 - bary.x - bary.y) + normals[i1].xyz * bary.x + normals[i2].xyz * bary.y;
 	n = normalize(transpose(mat3(gl_WorldToObjectEXT)) * n);
+	bool back = dot(n, gl_WorldRayDirectionEXT) > 0.0;
+	if (back && g.albedo.w > 0.5) { // double sided: the back is a front
+		n = -n;
+		back = false;
+	}
 	hit.normal = n;
 	hit.t = gl_HitTEXT;
-	hit.albedo = g.albedo.rgb;
+	hit.albedo = g.albedo.rgb * sample_albedo(g, hit_uv(g, uint(gl_PrimitiveID), bary)).rgb;
 	hit.emission = g.emission.rgb;
-	hit.backface = dot(n, gl_WorldRayDirectionEXT) > 0.0 ? 1.0 : 0.0;
+	hit.backface = back ? 1.0 : 0.0;
 }

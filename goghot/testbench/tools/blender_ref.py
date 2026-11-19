@@ -9,7 +9,7 @@ import os
 import sys
 
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 argv = sys.argv[sys.argv.index("--") + 1 :]
 scene_path, out_dir, width, height = argv[0], argv[1], int(argv[2]), int(argv[3])
@@ -110,6 +110,24 @@ for name, m in spec["materials"].items():
     bsdf.inputs["Roughness"].default_value = m.get("roughness", 1.0)
     bsdf.inputs["Metallic"].default_value = m.get("metallic", 0.0)
     bsdf.inputs["Specular IOR Level"].default_value = 0.0 if m.get("specular", 0.0) == 0.0 else 0.5
+    if "albedo_texture" in m:
+        nt = mat.node_tree
+        tex = nt.nodes.new("ShaderNodeTexImage")
+        tex.image = bpy.data.images.load(os.path.join(os.path.dirname(scene_path), "..", "assets", m["albedo_texture"]))
+        tex.interpolation = "Linear"
+        mul = nt.nodes.new("ShaderNodeMix")
+        mul.data_type = "RGBA"
+        mul.blend_type = "MULTIPLY"
+        mul.inputs["Factor"].default_value = 1.0
+        mul.inputs[6].default_value = (*m.get("albedo", [1, 1, 1]), 1.0)
+        nt.links.new(tex.outputs["Color"], mul.inputs[7])
+        nt.links.new(mul.outputs[2], bsdf.inputs["Base Color"])
+        if "alpha_scissor" in m:  # binary alpha test, like Godot's alpha scissor
+            gt = nt.nodes.new("ShaderNodeMath")
+            gt.operation = "GREATER_THAN"
+            gt.inputs[1].default_value = m["alpha_scissor"]
+            nt.links.new(tex.outputs["Alpha"], gt.inputs[0])
+            nt.links.new(gt.outputs[0], bsdf.inputs["Alpha"])
     if "emission" in m:
         bsdf.inputs["Emission Color"].default_value = (*m["emission"], 1.0)
         bsdf.inputs["Emission Strength"].default_value = m.get("emission_strength", 1.0)
@@ -117,13 +135,25 @@ for name, m in spec["materials"].items():
 
 # Objects.
 for o in spec["objects"]:
-    if o["type"] != "box":
+    if o["type"] == "box":
+        bpy.ops.mesh.primitive_cube_add(size=1.0, location=v3(o["center"]))
+        ob = bpy.context.active_object
+        s = o["size"]
+        ob.scale = (s[0], s[2], s[1])
+        ob.rotation_euler = (0.0, 0.0, math.radians(o.get("rot_y", 0.0)))
+    elif o["type"] == "quad":
+        # Plane in local XY facing +Z, same basis as capture.gd (right = up x normal).
+        bpy.ops.mesh.primitive_plane_add(size=1.0)
+        ob = bpy.context.active_object
+        n = Vector(o["normal"]).normalized()
+        r = Vector(o["up"]).cross(n).normalized()
+        u = n.cross(r)
+        bx, by, bz = v3(r), v3(u), v3(n)
+        s = o["size"]
+        ob.matrix_world = Matrix(((bx.x * s[0], by.x * s[1], bz.x, 0), (bx.y * s[0], by.y * s[1], bz.y, 0), (bx.z * s[0], by.z * s[1], bz.z, 0), (0, 0, 0, 1)))
+        ob.location = v3(o["center"])
+    else:
         raise ValueError("unknown object type " + o["type"])
-    bpy.ops.mesh.primitive_cube_add(size=1.0, location=v3(o["center"]))
-    ob = bpy.context.active_object
-    s = o["size"]
-    ob.scale = (s[0], s[2], s[1])
-    ob.rotation_euler = (0.0, 0.0, math.radians(o.get("rot_y", 0.0)))
     ob.data.materials.append(mats[o["material"]])
 
 # Lights (values applied per frame in apply_frame).

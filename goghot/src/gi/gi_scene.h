@@ -26,13 +26,17 @@ struct GIMeshCPU {
 	uint64_t id = 0; // Mesh RID id
 	std::vector<float> positions; // xyz per vertex (BLAS input)
 	std::vector<float> normals; // xyz0 per vertex (shading)
+	std::vector<float> uvs; // uv per vertex (texture lookups at hits)
 	std::vector<uint32_t> indices; // per surface, relative to the surface vertex_base
 	std::vector<Surface> surfaces;
 };
 
 struct GIMaterial {
-	godot::Color albedo; // linear; alpha unused
+	godot::Color albedo; // linear; alpha unused (multiplied with the albedo texture)
 	godot::Color emission; // linear, energy applied
+	godot::RID albedo_texture; // RenderingServer texture, invalid = none
+	float alpha_scissor = -1.0f; // < 0: opaque
+	bool double_sided = false;
 };
 
 struct GIInstance {

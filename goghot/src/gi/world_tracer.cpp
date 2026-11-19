@@ -4,6 +4,10 @@
 #include <godot_cpp/classes/rd_acceleration_structure_instance.hpp>
 #include <godot_cpp/classes/rd_hit_group.hpp>
 #include <godot_cpp/classes/rd_pipeline_shader.hpp>
+#include <godot_cpp/classes/rd_sampler_state.hpp>
+#include <godot_cpp/classes/rd_texture_format.hpp>
+#include <godot_cpp/classes/rd_texture_view.hpp>
+#include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/rd_shader_source.hpp>
 #include <godot_cpp/classes/rd_shader_spirv.hpp>
 #include <godot_cpp/classes/rd_uniform.hpp>
@@ -13,6 +17,7 @@
 #include "gi/gi_cache.glsl.gen.h"
 #include "gi/gi_cache_resolve.glsl.gen.h"
 #include "gi/gi_common.glsl.gen.h"
+#include "gi/gi_rt_ahit.glsl.gen.h"
 #include "gi/gi_rt_chit.glsl.gen.h"
 #include "gi/gi_rt_common.glsl.gen.h"
 #include "gi/gi_rt_miss.glsl.gen.h"
@@ -53,7 +58,7 @@ PackedByteArray bytes_of(const std::vector<T> &p_v) {
 	return b;
 }
 
-const char *RT_HEADER = "#version 460\n#extension GL_EXT_ray_tracing : require\n";
+const char *RT_HEADER = "#version 460\n#extension GL_EXT_ray_tracing : require\n#extension GL_EXT_nonuniform_qualifier : require\n";
 
 } // namespace
 
@@ -72,8 +77,9 @@ bool GIWorldTracer::init(RenderingDevice *p_rd, const String &, const String &) 
 	src->set_stage_source(RD::SHADER_STAGE_RAYGEN, rt_prefix + String(GI_RT_RAYGEN_GLSL));
 	src->set_stage_source(RD::SHADER_STAGE_MISS, rt_prefix + String(GI_RT_MISS_GLSL));
 	src->set_stage_source(RD::SHADER_STAGE_CLOSEST_HIT, rt_prefix + String(GI_RT_CHIT_GLSL));
+	src->set_stage_source(RD::SHADER_STAGE_ANY_HIT, rt_prefix + String(GI_RT_AHIT_GLSL));
 	Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(src);
-	for (RD::ShaderStage st : { RD::SHADER_STAGE_RAYGEN, RD::SHADER_STAGE_MISS, RD::SHADER_STAGE_CLOSEST_HIT }) {
+	for (RD::ShaderStage st : { RD::SHADER_STAGE_RAYGEN, RD::SHADER_STAGE_MISS, RD::SHADER_STAGE_CLOSEST_HIT, RD::SHADER_STAGE_ANY_HIT }) {
 		String err = spirv->get_stage_compile_error(st);
 		if (!err.is_empty()) {
 			UtilityFunctions::push_error("Goghot world tracer shader stage ", int(st), ": ", err);
@@ -95,6 +101,7 @@ bool GIWorldTracer::init(RenderingDevice *p_rd, const String &, const String &) 
 	Ref<RDHitGroup> hg;
 	hg.instantiate();
 	hg->set_closest_hit_shader(pipeline_shader(rt_shader));
+	hg->set_any_hit_shader(pipeline_shader(rt_shader));
 	TypedArray<RDPipelineShader> raygens, misses;
 	TypedArray<RDHitGroup> hits;
 	raygens.push_back(pipeline_shader(rt_shader));
@@ -120,6 +127,29 @@ bool GIWorldTracer::init(RenderingDevice *p_rd, const String &, const String &) 
 	cache_resolve_pipeline = rd->compute_pipeline_create(cache_resolve_shader);
 
 	cache = rd->storage_buffer_create(CACHE_ENTRIES * 48);
+	{ // 1x1 white for unused texture slots, linear repeat sampler
+		Ref<RDTextureFormat> tf;
+		tf.instantiate();
+		tf->set_format(RD::DATA_FORMAT_R8G8B8A8_UNORM);
+		tf->set_width(1);
+		tf->set_height(1);
+		tf->set_usage_bits(RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_UPDATE_BIT);
+		PackedByteArray px;
+		px.resize(4);
+		px.fill(255);
+		TypedArray<PackedByteArray> data;
+		data.push_back(px);
+		Ref<RDTextureView> tv;
+		tv.instantiate();
+		white_texture = rd->texture_create(tf, tv, data);
+		Ref<RDSamplerState> ss;
+		ss.instantiate();
+		ss->set_min_filter(RD::SAMPLER_FILTER_LINEAR);
+		ss->set_mag_filter(RD::SAMPLER_FILTER_LINEAR);
+		ss->set_repeat_u(RD::SAMPLER_REPEAT_MODE_REPEAT);
+		ss->set_repeat_v(RD::SAMPLER_REPEAT_MODE_REPEAT);
+		texture_sampler = rd->sampler_create(ss);
+	}
 	clear_cache();
 	ready = true;
 	return true;
@@ -141,7 +171,11 @@ void GIWorldTracer::_free_geometry() {
 		}
 	}
 	meshes.clear();
-	for (RID *r : { &vertex_buffer, &index_buffer, &normal_storage, &index_storage }) {
+	for (const RID &b : blas_index_buffers) {
+		rd->free_rid(b);
+	}
+	blas_index_buffers.clear();
+	for (RID *r : { &vertex_buffer, &normal_storage, &index_storage, &uv_storage }) {
 		if (r->is_valid()) {
 			rd->free_rid(*r);
 		}
@@ -155,7 +189,7 @@ void GIWorldTracer::free() {
 		return;
 	}
 	_free_geometry();
-	for (RID *r : { &tlas, &geo_buffer, &light_buffer, &cache, &cache_resolve_shader, &rt_shader, &shadow_miss_shader }) {
+	for (RID *r : { &tlas, &geo_buffer, &light_buffer, &cache, &cache_resolve_shader, &rt_shader, &shadow_miss_shader, &white_texture, &texture_sampler }) {
 		if (r->is_valid()) {
 			rd->free_rid(*r); // shaders free their pipelines / SBT
 		}
@@ -171,7 +205,7 @@ void GIWorldTracer::free() {
 
 void GIWorldTracer::_rebuild_geometry(const GISceneSnapshot &p_snap) {
 	_free_geometry();
-	std::vector<float> positions, normals;
+	std::vector<float> positions, normals, uvs;
 	std::vector<uint32_t> indices;
 	struct Base {
 		uint32_t vertex, index;
@@ -181,6 +215,7 @@ void GIWorldTracer::_rebuild_geometry(const GISceneSnapshot &p_snap) {
 		bases.push_back({ uint32_t(positions.size() / 3), uint32_t(indices.size()) });
 		positions.insert(positions.end(), m->positions.begin(), m->positions.end());
 		normals.insert(normals.end(), m->normals.begin(), m->normals.end());
+		uvs.insert(uvs.end(), m->uvs.begin(), m->uvs.end());
 		indices.insert(indices.end(), m->indices.begin(), m->indices.end());
 	}
 	if (indices.empty()) {
@@ -190,9 +225,9 @@ void GIWorldTracer::_rebuild_geometry(const GISceneSnapshot &p_snap) {
 	PackedByteArray pos_bytes = bytes_of(positions);
 	PackedByteArray idx_bytes = bytes_of(indices);
 	vertex_buffer = rd->vertex_buffer_create(pos_bytes.size(), pos_bytes, build_input);
-	index_buffer = rd->index_buffer_create(uint32_t(indices.size()), RD::INDEX_BUFFER_FORMAT_UINT32, idx_bytes, false, build_input);
 	normal_storage = _storage(bytes_of(normals));
 	index_storage = _storage(idx_bytes);
+	uv_storage = _storage(bytes_of(uvs));
 
 	for (size_t mi = 0; mi < p_snap.meshes.size(); mi++) {
 		const GIMeshCPU &m = *p_snap.meshes[mi];
@@ -206,8 +241,11 @@ void GIWorldTracer::_rebuild_geometry(const GISceneSnapshot &p_snap) {
 			g->set_vertex_count(s.vertex_count);
 			g->set_vertex_stride(12);
 			g->set_vertex_format(RD::DATA_FORMAT_R32G32B32_SFLOAT);
-			g->set_index_buffer(index_buffer);
-			g->set_index_offset((bases[mi].index + s.index_base) * 4);
+			std::vector<uint32_t> sidx(m.indices.begin() + s.index_base, m.indices.begin() + s.index_base + s.index_count);
+			RID ib = rd->index_buffer_create(s.index_count, RD::INDEX_BUFFER_FORMAT_UINT32, bytes_of(sidx), false, build_input);
+			blas_index_buffers.push_back(ib);
+			g->set_index_buffer(ib);
+			g->set_index_offset(0);
 			g->set_index_count(s.index_count);
 			geoms.push_back(g);
 		}
@@ -239,11 +277,13 @@ bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap) {
 
 	// Geometry/material table: one row per instance surface; instance custom index = first row.
 	struct GeoRow {
-		uint32_t index_base, vertex_base, pad0, pad1;
+		uint32_t index_base, vertex_base, texture, alpha_scissor_bits;
 		float albedo[4];
 		float emission[4];
 	};
 	std::vector<GeoRow> rows;
+	texture_table.clear();
+	std::unordered_map<uint64_t, uint32_t> tex_index;
 	TypedArray<RDAccelerationStructureInstance> insts;
 	std::vector<uint32_t> vertex_bases, index_bases;
 	{
@@ -263,13 +303,34 @@ bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap) {
 		ri->set_transform(gi.xform);
 		ri->set_id(uint32_t(rows.size()));
 		ri->set_hit_sbt_range(meshes[gi.mesh].sbt_range);
-		ri->set_flags(RD::ACCELERATION_STRUCTURE_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT);
-		insts.push_back(ri);
+		bool alpha_tested = false;
 		for (size_t s = 0; s < m.surfaces.size(); s++) {
 			const GIMaterial &mat = gi.materials[s];
-			rows.push_back({ index_bases[gi.mesh] + m.surfaces[s].index_base, vertex_bases[gi.mesh] + m.surfaces[s].vertex_base, 0, 0,
-					{ mat.albedo.r, mat.albedo.g, mat.albedo.b, 1.0f }, { mat.emission.r, mat.emission.g, mat.emission.b, 1.0f } });
+			uint32_t ti = 0xFFFFFFFFu;
+			if (mat.albedo_texture.is_valid()) {
+				auto it = tex_index.find(mat.albedo_texture.get_id());
+				if (it != tex_index.end()) {
+					ti = it->second;
+				} else if (uint32_t(texture_table.size()) < MAX_TEXTURES) {
+					RID rdt = RenderingServer::get_singleton()->texture_get_rd_texture(mat.albedo_texture, true);
+					if (rdt.is_valid()) {
+						ti = uint32_t(texture_table.size());
+						texture_table.push_back(rdt);
+						tex_index[mat.albedo_texture.get_id()] = ti;
+					}
+				}
+			}
+			alpha_tested = alpha_tested || (mat.alpha_scissor >= 0.0f && ti != 0xFFFFFFFFu);
+			float scissor = ti != 0xFFFFFFFFu ? mat.alpha_scissor : -1.0f;
+			uint32_t scissor_bits;
+			memcpy(&scissor_bits, &scissor, 4);
+			rows.push_back({ index_bases[gi.mesh] + m.surfaces[s].index_base, vertex_bases[gi.mesh] + m.surfaces[s].vertex_base, ti, scissor_bits,
+					{ mat.albedo.r, mat.albedo.g, mat.albedo.b, mat.double_sided ? 1.0f : 0.0f }, { mat.emission.r, mat.emission.g, mat.emission.b, 1.0f } });
 		}
+		// Alpha tested instances run the any-hit shader; everything else stays on the opaque fast path.
+		ri->set_flags(RD::ACCELERATION_STRUCTURE_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT |
+				(alpha_tested ? RD::ACCELERATION_STRUCTURE_INSTANCE_FORCE_NO_OPAQUE_BIT : RD::ACCELERATION_STRUCTURE_INSTANCE_FORCE_OPAQUE_BIT));
+		insts.push_back(ri);
 	}
 	instances_used = uint32_t(insts.size());
 	if (instances_used == 0) {
@@ -333,6 +394,18 @@ void GIWorldTracer::trace(const RID &p_frame_ubo, const RID &p_probes, const RID
 	us.push_back(uni(RD::UNIFORM_TYPE_STORAGE_BUFFER, 9, cache));
 	us.push_back(uni(RD::UNIFORM_TYPE_STORAGE_BUFFER, 10, p_fog_rays));
 	us.push_back(uni(RD::UNIFORM_TYPE_STORAGE_BUFFER, 11, p_refl));
+	us.push_back(uni(RD::UNIFORM_TYPE_STORAGE_BUFFER, 12, uv_storage));
+	{
+		Ref<RDUniform> u;
+		u.instantiate();
+		u->set_uniform_type(RD::UNIFORM_TYPE_TEXTURE);
+		u->set_binding(13);
+		for (uint32_t i = 0; i < MAX_TEXTURES; i++) {
+			u->add_id(i < uint32_t(texture_table.size()) ? RID(texture_table[i]) : white_texture);
+		}
+		us.push_back(u);
+	}
+	us.push_back(uni(RD::UNIFORM_TYPE_SAMPLER, 14, texture_sampler));
 	RID uset = UniformSetCacheRD::get_cache(rt_shader, 0, us);
 	const int64_t list = rd->raytracing_list_begin();
 	rd->raytracing_list_bind_raytracing_pipeline(list, rt_pipeline);

@@ -13,8 +13,10 @@
 #include <godot_cpp/classes/mesh_instance3d.hpp>
 #include <godot_cpp/classes/omni_light3d.hpp>
 #include <godot_cpp/classes/scene_tree.hpp>
+#include <godot_cpp/classes/texture2d.hpp>
 #include <godot_cpp/classes/window.hpp>
 #include <godot_cpp/core/class_db.hpp>
+#include <godot_cpp/variant/packed_vector2_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 
 using namespace godot;
@@ -38,6 +40,7 @@ std::shared_ptr<const GIMeshCPU> GoghotGIScene::_get_mesh(const Ref<Resource> &p
 		PackedVector3Array pos = arrays[Mesh::ARRAY_VERTEX];
 		PackedVector3Array nrm = arrays[Mesh::ARRAY_NORMAL];
 		PackedInt32Array idx = arrays[Mesh::ARRAY_INDEX];
+		PackedVector2Array uv = arrays[Mesh::ARRAY_TEX_UV];
 		GIMeshCPU::Surface surf;
 		surf.source_surface = s;
 		surf.vertex_base = uint32_t(m->positions.size() / 3);
@@ -47,6 +50,8 @@ std::shared_ptr<const GIMeshCPU> GoghotGIScene::_get_mesh(const Ref<Resource> &p
 			m->positions.insert(m->positions.end(), { pos[i].x, pos[i].y, pos[i].z });
 			Vector3 n = i < nrm.size() ? nrm[i] : Vector3(0, 1, 0);
 			m->normals.insert(m->normals.end(), { n.x, n.y, n.z, 0.0f });
+			Vector2 t = i < uv.size() ? uv[i] : Vector2();
+			m->uvs.insert(m->uvs.end(), { t.x, t.y });
 		}
 		// Godot front faces are clockwise; the tracer culls nothing and decides facing by normal,
 		// so winding does not matter here.
@@ -79,6 +84,17 @@ static GIMaterial material_of(const Ref<Material> &p_mat) {
 		// stand-in instead, which is close for rough metals and too dull for mirrors.
 		Color a = bm->get_albedo().srgb_to_linear();
 		out.albedo = Color(a.r, a.g, a.b);
+		Ref<Texture2D> tex = bm->get_texture(BaseMaterial3D::TEXTURE_ALBEDO);
+		if (tex.is_valid()) {
+			out.albedo_texture = tex->get_rid();
+		}
+		const BaseMaterial3D::Transparency tr = bm->get_transparency();
+		if (tr == BaseMaterial3D::TRANSPARENCY_ALPHA_SCISSOR) {
+			out.alpha_scissor = bm->get_alpha_scissor_threshold();
+		} else if (tr == BaseMaterial3D::TRANSPARENCY_ALPHA_HASH) {
+			out.alpha_scissor = 0.5f; // stochastic in the raster, a fixed test for the tracer
+		}
+		out.double_sided = bm->get_cull_mode() == BaseMaterial3D::CULL_DISABLED;
 		if (bm->get_feature(BaseMaterial3D::FEATURE_EMISSION)) {
 			out.emission = bm->get_emission().srgb_to_linear() * bm->get_emission_energy_multiplier();
 		}

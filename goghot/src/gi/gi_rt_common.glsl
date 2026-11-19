@@ -7,10 +7,10 @@ layout(set = 0, binding = 4, std430) restrict readonly buffer Counter { uint cou
 
 struct Geo {
 	uint index_base; // into indices[]
-	uint vertex_base; // into normals[]
-	uint pad0;
-	uint pad1;
-	vec4 albedo; // linear diffuse albedo
+	uint vertex_base; // into normals[] / uvs[]
+	uint texture; // albedo texture slot, 0xFFFFFFFF = none
+	uint alpha_scissor; // float bits, < 0 = opaque
+	vec4 albedo; // rgb linear albedo (times the texture), w: 1 = double sided
 	vec4 emission; // linear radiance
 };
 layout(set = 0, binding = 5, std430) restrict readonly buffer Geos { Geo geos[]; };
@@ -30,6 +30,22 @@ struct ReflRay {
 	vec4 radiance;
 };
 layout(set = 0, binding = 11, std430) restrict buffer ReflRays { ReflRay refl[]; };
+layout(set = 0, binding = 12, std430) restrict readonly buffer UVs { vec2 uvs[]; };
+layout(set = 0, binding = 13) uniform texture2D textures[128];
+layout(set = 0, binding = 14) uniform sampler texture_sampler;
+
+// Texture coordinate and albedo texture lookup at a hit (closest and any hit).
+vec2 hit_uv(Geo g, uint prim, vec2 bary) {
+	uint base = g.index_base + prim * 3u;
+	return uvs[indices[base] + g.vertex_base] * (1.0 - bary.x - bary.y) + uvs[indices[base + 1u] + g.vertex_base] * bary.x + uvs[indices[base + 2u] + g.vertex_base] * bary.y;
+}
+
+vec4 sample_albedo(Geo g, vec2 uv) {
+	if (g.texture == 0xFFFFFFFFu) {
+		return vec4(1.0);
+	}
+	return textureLod(sampler2D(textures[nonuniformEXT(g.texture)], texture_sampler), uv, 0.0);
+}
 
 struct HitPayload {
 	vec3 normal; // world, shading normal

@@ -48,6 +48,15 @@ func _build(root: Node3D) -> void:
 		mat.metallic = m.get("metallic", 0.0)
 		mat.metallic_specular = 0.0 if m.get("specular", 0.0) == 0.0 else 0.5
 		mat.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT # Cycles Principled diffuse is Lambertian (Godot default is Burley)
+		if m.has("albedo_texture"):
+			var img := Image.load_from_file(ProjectSettings.globalize_path("res://assets/" + str(m.albedo_texture)))
+			mat.albedo_texture = ImageTexture.create_from_image(img)
+			mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR # no mipmaps: Cycles does not mip either
+		if m.has("alpha_scissor"):
+			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+			mat.alpha_scissor_threshold = m.alpha_scissor
+		if m.get("double_sided", false):
+			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 		if m.has("emission"):
 			mat.emission_enabled = true
 			mat.emission = _col(m.emission)
@@ -61,12 +70,22 @@ func _build(root: Node3D) -> void:
 				var bm := BoxMesh.new()
 				bm.size = _v3(o.size)
 				mi.mesh = bm
+			"quad":
+				# QuadMesh faces local +Z; spec gives the world normal and up (right = up x normal).
+				var qm := QuadMesh.new()
+				qm.size = Vector2(o.size[0], o.size[1])
+				mi.mesh = qm
 			_:
 				push_error("unknown object type " + str(o.type))
 				continue
 		mi.material_override = mats[o.material]
 		mi.position = _v3(o.center)
-		mi.rotation_degrees.y = o.get("rot_y", 0.0)
+		if o.type == "quad":
+			var nrm := _v3(o.normal).normalized()
+			var right := _v3(o.up).cross(nrm).normalized()
+			mi.basis = Basis(right, nrm.cross(right), nrm)
+		else:
+			mi.rotation_degrees.y = o.get("rot_y", 0.0)
 		root.add_child(mi)
 
 	for l: Dictionary in spec.lights:

@@ -18,7 +18,7 @@ float omni_attenuation(float dist, float range, float decay) {
 
 float trace_shadow(vec3 o, vec3 d, float tmax) {
 	shadow_visible = 0.0;
-	traceRayEXT(tlas, gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+	traceRayEXT(tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT,
 			0xFF, 0, 1, 1, o, 0.0, d, tmax, 1);
 	return shadow_visible;
 }
@@ -52,7 +52,7 @@ vec3 direct_light(vec3 p, vec3 n) {
 
 bool trace_hit(vec3 o, vec3 d) {
 	hit.t = -1.0;
-	traceRayEXT(tlas, gl_RayFlagsOpaqueEXT, 0xFF, 0, 1, 0, o, 0.0, d, 1e5, 0);
+	traceRayEXT(tlas, gl_RayFlagsNoneEXT, 0xFF, 0, 1, 0, o, 0.0, d, 1e5, 0); // opacity comes from instance flags
 	return hit.t >= 0.0;
 }
 

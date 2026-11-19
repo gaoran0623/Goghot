@@ -4,6 +4,7 @@
 
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/variant/rid.hpp>
+#include <godot_cpp/variant/typed_array.hpp>
 
 #include <vector>
 
@@ -40,7 +41,11 @@ private:
 
 	// Scene geometry (rebuilt when the mesh set changes).
 	uint64_t mesh_set_hash = 0;
-	godot::RID vertex_buffer, index_buffer, normal_storage, index_storage;
+	godot::RID vertex_buffer, normal_storage, index_storage, uv_storage;
+	std::vector<godot::RID> blas_index_buffers; // one per surface: RD validates indices against the whole buffer
+	static constexpr uint32_t MAX_TEXTURES = 128;
+	godot::RID white_texture, texture_sampler;
+	godot::TypedArray<godot::RID> texture_table;
 	struct MeshGPU {
 		godot::RID blas;
 		int64_t sbt_range = -1;
