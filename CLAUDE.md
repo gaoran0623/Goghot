@@ -23,6 +23,7 @@
   1. scene shader 可读取外部间接光/环境光贴图，替换 ambient 项（StandardMaterial3D 直接可用）
   2. 暴露 mesh 与蒙皮结果的 GPU 顶点缓冲 RID（用于 BLAS）
   3. 体积雾可采样外部 GI 缓存
+  4. 修 Vulkan 驱动光追 bug：TLAS 实例引用 BLAS 时用加速结构自身的 device address（vkGetAccelerationStructureDeviceAddressKHR），而非其缓冲地址（2026-11-20 用户同意）
 - **主体全部放在 GDExtension**（仓库根目录 `goghot/`）：探针、追踪、缓存、降噪、曝光。
 - commit 前缀：引擎补丁用 `[engine]`，扩展用 `[goghot]`，二者不混在同一个 commit。
 - 不向上游提交 PR（Godot 不接受 AI 生成代码）。
