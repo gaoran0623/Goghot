@@ -65,7 +65,7 @@ void main() {
 	ivec3 ht;
 	int hc;
 	float t = vox_trace(o, d, 1e4, 0.0, ht, hc);
-	vec3 c = fr.sky.rgb;
+	vec3 c = sky_radiance(d);
 	if (t >= 0.0) {
 		vec3 hn;
 		int face = vox_face_for_ray(ht, d, hn);

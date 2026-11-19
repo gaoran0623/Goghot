@@ -5,6 +5,9 @@
 
 #include <godot_cpp/classes/camera3d.hpp>
 #include <godot_cpp/classes/engine.hpp>
+#include <godot_cpp/classes/image.hpp>
+#include <godot_cpp/classes/texture2d.hpp>
+#include <godot_cpp/core/math.hpp>
 #include <godot_cpp/classes/panorama_sky_material.hpp>
 #include <godot_cpp/classes/physical_sky_material.hpp>
 #include <godot_cpp/classes/procedural_sky_material.hpp>
@@ -17,6 +20,8 @@
 #include <godot_cpp/core/class_db.hpp>
 
 using namespace godot;
+
+static constexpr double Math_PI_CONST = 3.14159265358979323846;
 
 namespace goghot {
 
@@ -175,31 +180,125 @@ void GoghotGI::_detach() {
 	attached_owner = ObjectID();
 }
 
-Color GoghotGI::_sky_radiance(const Ref<Environment> &p_env) const {
+namespace {
+
+// Real L2 SH basis (same order and constants as sky_radiance() in gi_common.glsl).
+void sh_basis(const Vector3 &d, float r_y[9]) {
+	r_y[0] = 0.282095f;
+	r_y[1] = 0.488603f * d.y;
+	r_y[2] = 0.488603f * d.z;
+	r_y[3] = 0.488603f * d.x;
+	r_y[4] = 1.092548f * d.x * d.y;
+	r_y[5] = 1.092548f * d.y * d.z;
+	r_y[6] = 0.315392f * (3.0f * d.z * d.z - 1.0f);
+	r_y[7] = 1.092548f * d.x * d.z;
+	r_y[8] = 0.546274f * (d.x * d.x - d.y * d.y);
+}
+
+// Projects radiance(direction) over an equirectangular grid (Godot's panorama mapping:
+// u = atan2(x, -z) / 2pi, v = acos(y) / pi) into 9 SH coefficients.
+template <typename F>
+PackedColorArray sh_project(int p_w, int p_h, F p_radiance) {
+	double acc[9][3] = {};
+	for (int j = 0; j < p_h; j++) {
+		const float theta = (float(j) + 0.5f) / float(p_h) * float(Math_PI_CONST);
+		const float dw = (2.0f * float(Math_PI_CONST) / p_w) * (float(Math_PI_CONST) / p_h) * Math::sin(theta);
+		for (int i = 0; i < p_w; i++) {
+			const float phi = (float(i) + 0.5f) / float(p_w) * 2.0f * float(Math_PI_CONST);
+			const Vector3 d(Math::sin(theta) * Math::sin(phi), Math::cos(theta), -Math::sin(theta) * Math::cos(phi));
+			const Color l = p_radiance(d, i, j);
+			float y[9];
+			sh_basis(d, y);
+			for (int k = 0; k < 9; k++) {
+				acc[k][0] += l.r * y[k] * dw;
+				acc[k][1] += l.g * y[k] * dw;
+				acc[k][2] += l.b * y[k] * dw;
+			}
+		}
+	}
+	PackedColorArray out;
+	out.resize(9);
+	for (int k = 0; k < 9; k++) {
+		out.set(k, Color(acc[k][0], acc[k][1], acc[k][2]));
+	}
+	return out;
+}
+
+} // namespace
+
+// Sky radiance for rays that miss, in the units the scene is shaded in. Returns the average and, for
+// Panorama and Procedural skies, their L2 SH in r_sh (else r_sh is emptied: uniform sky).
+// Units (as Godot draws them): sky / background * bg_energy (* bg_intensity with physical units) *
+// camera exposure normalization; an ambient light color is used as is (Godot applies it unscaled).
+Color GoghotGI::_sky_radiance(const Ref<Environment> &p_env, PackedColorArray &r_sh) const {
+	r_sh.clear();
 	if (p_env.is_null()) {
 		return Color(0, 0, 0);
 	}
-	// Uniform sky radiance for rays that miss (directional sky sampling is not implemented yet).
 	if (p_env->get_ambient_source() == Environment::AMBIENT_SOURCE_COLOR) {
 		return p_env->get_ambient_light_color().srgb_to_linear() * p_env->get_ambient_light_energy();
 	}
+	const float scale = p_env->get_bg_energy_multiplier() * (physical_units ? p_env->get_bg_intensity() : 1.0f) * exposure_scale;
 	switch (p_env->get_background()) {
 		case Environment::BG_COLOR:
-			return p_env->get_bg_color().srgb_to_linear() * p_env->get_bg_energy_multiplier();
+			return p_env->get_bg_color().srgb_to_linear() * scale;
 		case Environment::BG_SKY: {
 			Ref<Sky> sky = p_env->get_sky();
 			if (sky.is_valid()) {
 				Ref<ProceduralSkyMaterial> psm = sky->get_material();
-				if (psm.is_valid()) { // average of the upper hemisphere colors, roughly
-					Color c = (psm->get_sky_top_color().srgb_to_linear() + psm->get_sky_horizon_color().srgb_to_linear() * 2.0f) / 3.0f;
-					return c * psm->get_sky_energy_multiplier() * p_env->get_bg_energy_multiplier();
+				if (psm.is_valid()) {
+					// Godot's procedural sky shader without the sun disks (the sun is traced as a light).
+					const Color top = psm->get_sky_top_color().srgb_to_linear() * psm->get_sky_energy_multiplier();
+					const Color hor = psm->get_sky_horizon_color().srgb_to_linear() * psm->get_sky_energy_multiplier();
+					const Color gbot = psm->get_ground_bottom_color().srgb_to_linear() * psm->get_ground_energy_multiplier();
+					const Color ghor = psm->get_ground_horizon_color().srgb_to_linear() * psm->get_ground_energy_multiplier();
+					const float inv_sky = 0.6f / MAX(psm->get_sky_curve(), 1e-4f), inv_ground = 0.6f / MAX(psm->get_ground_curve(), 1e-4f);
+					const float k = scale * psm->get_energy_multiplier();
+					r_sh = sh_project(64, 32, [&](const Vector3 &d, int, int) {
+						const float v = CLAMP(d.y, -1.0f, 1.0f);
+						const Color sk = top.lerp(hor, CLAMP(Math::pow(1.0f - v, inv_sky), 0.0f, 1.0f));
+						const Color gr = gbot.lerp(ghor, CLAMP(Math::pow(1.0f + v, inv_ground), 0.0f, 1.0f));
+						return (d.y >= 0.0f ? sk : gr) * k;
+					});
+					return Color(r_sh[0].r, r_sh[0].g, r_sh[0].b) * 0.282095f;
+				}
+				Ref<PanoramaSkyMaterial> pano = sky->get_material();
+				if (pano.is_valid() && pano->get_panorama().is_valid()) {
+					const uint64_t id = pano->get_panorama()->get_rid().get_id();
+					if (id == pano_sh_id && pano_sh.size() == 9) {
+						const float k = scale * pano->get_energy_multiplier();
+						for (int i = 0; i < 9; i++) {
+							r_sh.push_back(pano_sh[i] * k);
+						}
+						return Color(r_sh[0].r, r_sh[0].g, r_sh[0].b) * 0.282095f;
+					}
+					Ref<Image> img = pano->get_panorama()->get_image();
+					if (img.is_valid() && !img->is_empty()) {
+						img = img->duplicate();
+						if (img->is_compressed()) {
+							img->decompress();
+						}
+						const bool hdr = img->get_format() >= Image::FORMAT_RF && img->get_format() <= Image::FORMAT_RGBE9995;
+						img->convert(Image::FORMAT_RGBAF);
+						img->resize(128, 64, Image::INTERPOLATE_BILINEAR);
+						pano_sh = sh_project(128, 64, [&](const Vector3 &, int i, int j) {
+							Color c = img->get_pixel(i, j);
+							return hdr ? c : c.srgb_to_linear();
+						});
+						pano_sh_id = id;
+						const float k = scale * pano->get_energy_multiplier();
+						for (int i = 0; i < 9; i++) {
+							r_sh.push_back(pano_sh[i] * k);
+						}
+						return Color(r_sh[0].r, r_sh[0].g, r_sh[0].b) * 0.282095f;
+					}
 				}
 				Ref<PhysicalSkyMaterial> phy = sky->get_material();
-				if (phy.is_valid()) {
-					return Color(0.35f, 0.5f, 0.8f) * phy->get_energy_multiplier() * p_env->get_bg_energy_multiplier();
+				if (phy.is_valid()) { // not evaluated: rough uniform blue sky
+					return Color(0.35f, 0.5f, 0.8f) * phy->get_energy_multiplier() * scale;
 				}
 			}
-			return Color(0.3f, 0.35f, 0.4f) * p_env->get_bg_energy_multiplier();
+			return Color(0.3f, 0.35f, 0.4f) * scale; // custom sky shader: unknown, uniform estimate
 		}
 		default:
 			return Color(0, 0, 0);
@@ -231,7 +330,11 @@ void GoghotGI::_process(double p_delta) {
 				env = vp->find_world_3d()->get_environment();
 			}
 		}
-		gi->set_sky_color(_sky_radiance(env));
+		_update_units();
+		PackedColorArray sh;
+		gi->set_sky_color(_sky_radiance(env, sh));
+		gi->set_sky_energy(1.0f);
+		gi->set_sky_sh(sh);
 	}
 	GoghotGIScene::_process(p_delta);
 }

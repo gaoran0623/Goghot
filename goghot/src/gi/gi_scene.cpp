@@ -6,6 +6,10 @@
 #include <godot_cpp/classes/base_material3d.hpp>
 #include <godot_cpp/classes/skin.hpp>
 #include <godot_cpp/classes/camera3d.hpp>
+#include <godot_cpp/classes/camera_attributes.hpp>
+#include <godot_cpp/classes/camera_attributes_physical.hpp>
+#include <godot_cpp/classes/project_settings.hpp>
+#include <godot_cpp/core/math.hpp>
 #include <godot_cpp/classes/environment.hpp>
 #include <godot_cpp/classes/viewport.hpp>
 #include <godot_cpp/classes/world3d.hpp>
@@ -29,6 +33,8 @@
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 
 using namespace godot;
+
+static constexpr double Math_PI_CONST = 3.14159265358979323846;
 
 namespace goghot {
 
@@ -151,8 +157,9 @@ GIMaterial GoghotGIScene::_material_of(const Ref<Material> &p_mat) {
 			out.coverage = 1.0f; // opaque: the texture alpha does not cut holes
 		}
 		if (bm->get_feature(BaseMaterial3D::FEATURE_EMISSION)) {
-			// As Godot shades it: add: (color + texture) * energy, multiply: color * texture * energy.
-			out.emission_energy = bm->get_emission_energy_multiplier();
+			// As Godot shades it: add: (color + texture) * energy, multiply: color * texture * energy;
+			// energy = multiplier (* intensity in nits with physical units) * exposure normalization.
+			out.emission_energy = bm->get_emission_energy_multiplier() * (physical_units ? bm->get_emission_intensity() : 1.0f) * exposure_scale;
 			out.emission = bm->get_emission().srgb_to_linear() * out.emission_energy;
 			Ref<Texture2D> etex = bm->get_texture(BaseMaterial3D::TEXTURE_EMISSION);
 			if (etex.is_valid()) {
@@ -196,9 +203,50 @@ static uint64_t instance_key(const Object *p_node, uint64_t p_index) {
 	return h ^ (h >> 31);
 }
 
-// Light colors as Godot shades them (non-physical light units: color * energy).
-static Color light_color(const Light3D *p_light) {
-	return p_light->get_color().srgb_to_linear() * p_light->get_param(Light3D::PARAM_ENERGY);
+void GoghotGIScene::_update_units() {
+	physical_units = bool(ProjectSettings::get_singleton()->get_setting("rendering/lights_and_shadows/use_physical_light_units", false));
+	Ref<CameraAttributes> ca;
+	if (Viewport *vp = get_viewport()) {
+		if (Camera3D *cam = vp->get_camera_3d()) {
+			ca = cam->get_attributes();
+		}
+		if (ca.is_null() && vp->find_world_3d().is_valid()) {
+			ca = vp->find_world_3d()->get_camera_attributes();
+		}
+	}
+	exposure_scale = 1.0f;
+	if (ca.is_valid()) {
+		// Same as CameraAttributes::_update_exposure + calculate_exposure_normalization.
+		exposure_scale = ca->get_exposure_multiplier();
+		if (physical_units) {
+			if (Ref<CameraAttributesPhysical> phys = ca; phys.is_valid()) {
+				const float e = phys->get_aperture() * phys->get_aperture() * phys->get_shutter_speed() * (100.0f / phys->get_exposure_sensitivity());
+				exposure_scale *= 1.0f / (e * 1.2f);
+			} else {
+				exposure_scale *= ca->get_exposure_sensitivity() / 3072007.0f; // CameraAttributesPractical
+			}
+		}
+	}
+}
+
+// Light color as the tracer shades it (diffuse = albedo * this * n.l * attenuation), matching Godot's
+// light energy: non-physical: color * energy; physical: color * energy * intensity (lux, or lumens
+// converted to candela: / 4 pi omni, / pi spot) / pi; both times the camera exposure normalization.
+static Color light_color(const Light3D *p_light, GILight::Type p_type, bool p_physical, float p_exposure) {
+	float e = p_light->get_param(Light3D::PARAM_ENERGY) * p_exposure;
+	if (p_physical) {
+		e *= p_light->get_param(Light3D::PARAM_INTENSITY) / float(Math_PI_CONST);
+		if (p_type == GILight::OMNI) {
+			e /= 4.0f * float(Math_PI_CONST);
+		} else if (p_type == GILight::SPOT) {
+			e /= float(Math_PI_CONST);
+		}
+	}
+	Color c = p_light->get_color().srgb_to_linear();
+	if (p_physical) {
+		c *= p_light->get_correlated_color().srgb_to_linear(); // color temperature, as Light3D::set_color
+	}
+	return c * e;
 }
 
 void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index) {
@@ -272,7 +320,7 @@ void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unorder
 			GILight l;
 			l.type = GILight::DIRECTIONAL;
 			l.vec = -dl->get_global_transform().basis.get_column(2).normalized();
-			l.color = light_color(dl);
+			l.color = light_color(dl, GILight::DIRECTIONAL, physical_units, exposure_scale);
 			l.shadow = dl->has_shadow();
 			r_snap.lights.push_back(l);
 		}
@@ -281,7 +329,7 @@ void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unorder
 			GILight l;
 			l.type = GILight::OMNI;
 			l.vec = ol->get_global_position();
-			l.color = light_color(ol);
+			l.color = light_color(ol, GILight::OMNI, physical_units, exposure_scale);
 			l.range = ol->get_param(Light3D::PARAM_RANGE);
 			l.attenuation = ol->get_param(Light3D::PARAM_ATTENUATION);
 			l.shadow = ol->has_shadow();
@@ -295,7 +343,7 @@ void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unorder
 			l.type = GILight::SPOT;
 			l.vec = sl->get_global_position();
 			l.spot_dir = -sl->get_global_transform().basis.get_column(2).normalized();
-			l.color = light_color(sl);
+			l.color = light_color(sl, GILight::SPOT, physical_units, exposure_scale);
 			l.range = sl->get_param(Light3D::PARAM_RANGE);
 			l.attenuation = sl->get_param(Light3D::PARAM_ATTENUATION);
 			l.spot_cos = Math::cos(Math::deg_to_rad(sl->get_param(Light3D::PARAM_SPOT_ANGLE)));
@@ -313,6 +361,7 @@ void GoghotGIScene::update_now() {
 	if (gi.is_null() || !is_inside_tree()) {
 		return;
 	}
+	_update_units();
 	auto snap = std::make_shared<GISceneSnapshot>();
 	std::unordered_map<uint64_t, uint32_t> mesh_index;
 	Node *root = _scene_root();

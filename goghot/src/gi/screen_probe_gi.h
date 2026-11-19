@@ -1,6 +1,7 @@
 #pragma once
 
 #include <godot_cpp/classes/compositor_effect.hpp>
+#include <godot_cpp/variant/packed_color_array.hpp>
 #include <godot_cpp/classes/render_data.hpp>
 #include <godot_cpp/classes/render_scene_buffers_rd.hpp>
 #include <godot_cpp/classes/rendering_device.hpp>
@@ -63,6 +64,7 @@ class GoghotScreenProbeGI : public godot::CompositorEffect {
 	bool jitter_probes = false; // measured: jitter adds flicker and does not improve accuracy
 	godot::Color sky_color = godot::Color(0, 0, 0);
 	float sky_energy = 1.0f;
+	godot::PackedColorArray sky_sh; // 9 L2 SH coefficients of the sky radiance (linear, world), empty = uniform sky_color
 	int debug_mode = 0;
 	bool world_tracing = true;
 	float cache_min_cell = 0.05f;
@@ -166,6 +168,7 @@ public:
 	GOGHOT_PROP(bool, jitter_probes)
 	GOGHOT_PROP(godot::Color, sky_color)
 	GOGHOT_PROP(float, sky_energy)
+	GOGHOT_PROP(godot::PackedColorArray, sky_sh)
 	GOGHOT_PROP(int, debug_mode)
 	GOGHOT_PROP(bool, world_tracing)
 	GOGHOT_PROP(float, cache_min_cell)

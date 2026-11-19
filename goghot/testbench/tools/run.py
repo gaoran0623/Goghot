@@ -10,6 +10,8 @@ Metrics:
   flip_norm       FLIP after scaling the image (linear) so its mean luminance matches the reference:
                   structure errors (leaks, occlusion, color bleeding) without the overall brightness bias
   lum_ratio       mean linear luminance, image / reference (overall brightness bias; 1 = none)
+  ghost           motion lag: FLIP of in-motion frames vs the same pose rendered converged (capture.gd
+                  conv_NNNN.png, Godot itself, no Cycles needed); ghost_diff = mean abs diff (/255)
   flicker         mean abs diff between consecutive frames during the static hold (0..255 scale)
   gpu_ms          mean / p95 viewport GPU time over all captured frames (whole frame, not only GI)
 """
@@ -135,6 +137,19 @@ def metrics(frames_dir, ref_dir, spec, cap):
     if ref_dir:
         ref_scores(frames_dir, ref_dir, spec, out)
 
+    conv = cap.get("conv_frames", [])
+    if conv:
+        import flip_evaluator as flip
+        gf, gd = [], []
+        for f in conv:
+            mov = load_rgb(frames_dir / f"frame_{f:04d}.png")
+            cv = load_rgb(frames_dir / f"conv_{f:04d}.png")
+            _, g, _ = flip.evaluate(cv, mov, "LDR")
+            gf.append(g)
+            gd.append(float(np.abs(mov - cv).mean() * 255.0))
+        out["ghost"] = float(np.mean(gf))
+        out["ghost_diff"] = float(np.mean(gd))
+
     hold = spec["camera"].get("hold_frames", 0)
     if hold >= 2:
         diffs = []
@@ -195,6 +210,10 @@ def main():
                     help="auto = histogram auto exposure; FLIP/SSIM vs Cycles are skipped (not comparable), key metrics reported")
     ap.add_argument("--gi-params", default="", help='JSON property overrides for the GI effect, e.g. {"probe_spacing": 16}')
     ap.add_argument("--gi", default="baseline", help="GI mode passed to capture.gd (baseline, inject_identity, inject_red, screen_probe, rt, node, godot_ssil, godot_sdfgi, godot_voxelgi, godot_voxelgi_interior)")
+    ap.add_argument("--soak", type=float, default=0.0, metavar="SECONDS",
+                    help="soak test: loop each scene for SECONDS, log video memory / GPU time (no references, no frames)")
+    ap.add_argument("--units", default="default", choices=["default", "physical"],
+                    help="physical: run with physical light units (writes testbench/override.cfg for the run); same expected images")
     ap.add_argument("--rescore", nargs="+", metavar="REPORT_DIR",
                     help="recompute the reference metrics of existing reports from their saved frames (no rendering); --godot not needed")
     args = ap.parse_args()
@@ -225,8 +244,29 @@ def main():
         frames_dir = report_dir / name / "frames"
         cmd = [args.godot, "--path", str(BENCH), "--rendering-driver", "vulkan",
                "--resolution", f"{args.width}x{args.height}", "--script", "res://capture.gd", "--",
-               str(scene_path), str(frames_dir), args.gi, args.exposure, args.gi_params]
-        rc = run(cmd, logs_dir / f"{name}_godot.log")
+               str(scene_path), str(frames_dir), args.gi, args.exposure, args.gi_params, str(args.soak) if args.soak > 0 else ""]
+        override = BENCH / "override.cfg"
+        if args.units == "physical":
+            override.write_text("[rendering]" + chr(10) + "lights_and_shadows/use_physical_light_units=true" + chr(10), encoding="utf-8")
+        try:
+            rc = run(cmd, logs_dir / f"{name}_godot.log")
+        finally:
+            if args.units == "physical":
+                override.unlink(missing_ok=True)
+        if args.soak > 0:
+            sp = frames_dir / "soak.json"
+            if rc != 0 or not sp.exists():
+                results[name] = {"error": f"godot exited {rc}, see logs/{name}_godot.log"}
+                continue
+            soak = json.loads(sp.read_text())
+            shutil.copy2(sp, report_dir / name / "soak.json")
+            s0, s1 = soak["samples"][1] if len(soak["samples"]) > 1 else soak["samples"][0], soak["samples"][-1]
+            mb = lambda b: b / (1024.0 * 1024.0)
+            vmax = max(s["vram_total"] for s in soak["samples"])
+            results[name] = {"soak": True, "frames": soak["frames"], "vram_start_mb": mb(s0["vram_total"]), "vram_end_mb": mb(s1["vram_total"]),
+                             "vram_max_mb": mb(vmax), "vram_growth_mb": mb(s1["vram_total"] - s0["vram_total"])}
+            print(f"[{name}] soak {soak['frames']} frames: vram {mb(s0['vram_total']):.1f} -> {mb(s1['vram_total']):.1f} MB (max {mb(vmax):.1f})")
+            continue
         cap_path = frames_dir / "capture.json"
         if rc != 0 or not cap_path.exists():
             results[name] = {"error": f"godot exited {rc}, see logs/{name}_godot.log"}
@@ -256,9 +296,9 @@ def main():
                 sheet.paste(t, (x, 0))
                 x += t.width
             sheet.save(report_dir / name / f"compare_{f:04d}.png")
-        print(f"[{name}] flip={fmt(m.get('flip'))} flip_norm={fmt(m.get('flip_norm'))} lum={fmt(m.get('lum_ratio'), '{:.3f}')} ssim={fmt(m.get('ssim'))} flicker={fmt(m.get('flicker'), '{:.3f}')} flicker_px={fmt(m.get('flicker_px'), '{:.2f}')}% drift={fmt(m.get('drift'), '{:.2f}')} gpu={m['gpu_ms_mean']:.2f}ms goghot={m['goghot_ms']:.3f}ms")
+        print(f"[{name}] flip={fmt(m.get('flip'))} flip_norm={fmt(m.get('flip_norm'))} lum={fmt(m.get('lum_ratio'), '{:.3f}')} ghost={fmt(m.get('ghost'))} ssim={fmt(m.get('ssim'))} flicker={fmt(m.get('flicker'), '{:.3f}')} flicker_px={fmt(m.get('flicker_px'), '{:.2f}')}% drift={fmt(m.get('drift'), '{:.2f}')} gpu={m['gpu_ms_mean']:.2f}ms goghot={m['goghot_ms']:.3f}ms")
 
-    meta = {"tag": args.tag, "stamp": stamp, "gi": args.gi, "gi_params": args.gi_params, "exposure": args.exposure,
+    meta = {"tag": args.tag, "stamp": stamp, "gi": args.gi, "gi_params": args.gi_params, "exposure": args.exposure, "units": args.units,
             "width": args.width, "height": args.height, "ref_samples": args.ref_samples}
     (report_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     write_report(report_dir, results, meta)
@@ -273,13 +313,16 @@ def write_report(report_dir, results, meta, title=None):
              f"Resolution {meta['width']}x{meta['height']}, Cycles {meta['ref_samples']} spp. "
              "Images: `<scene>/compare_NNNN.png` = Godot | Cycles | FLIP. "
              "FLIP norm = FLIP after matching the mean luminance to the reference; lum = mean luminance / reference.", "",
-             "| scene | FLIP ↓ | FLIP norm ↓ | lum | SSIM ↑ | flicker ↓ (static, /255) | flicker px % ↓ (detrended std > 1/255) | drift /255 (over hold) | key mean [min, max] | GPU ms mean / p95 (whole frame) | goghot passes ms |",
-             "|---|---|---|---|---|---|---|---|---|---|---|"]
+             "| scene | FLIP ↓ | FLIP norm ↓ | lum | ghost ↓ (motion vs converged, FLIP) | SSIM ↑ | flicker ↓ (static, /255) | flicker px % ↓ (detrended std > 1/255) | drift /255 (over hold) | key mean [min, max] | GPU ms mean / p95 (whole frame) | goghot passes ms |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for name, m in results.items():
         if "error" in m:
-            lines.append(f"| {name} | error: {m['error']} | | | | | | | | | |")
+            lines.append(f"| {name} | error: {m['error']} | | | | | | | | | | |")
+        elif m.get("soak"):
+            lines.append(f"| {name} | soak: {m['frames']} frames, video memory {m['vram_start_mb']:.1f} -> {m['vram_end_mb']:.1f} MB "
+                         f"(max {m['vram_max_mb']:.1f}, growth {m['vram_growth_mb']:+.1f}) | | | | | | | | | | |")
         else:
-            lines.append(f"| {name} | {fmt(m.get('flip'))} | {fmt(m.get('flip_norm'))} | {fmt(m.get('lum_ratio'), '{:.3f}')} | {fmt(m.get('ssim'))} | "
+            lines.append(f"| {name} | {fmt(m.get('flip'))} | {fmt(m.get('flip_norm'))} | {fmt(m.get('lum_ratio'), '{:.3f}')} | {fmt(m.get('ghost'))} | {fmt(m.get('ssim'))} | "
                          f"{fmt(m.get('flicker'), '{:.3f}')} | {fmt(m.get('flicker_px'), '{:.2f}')} | {fmt(m.get('drift'), '{:.2f}')} | "
                          f"{m['key_mean']:.3f} [{m['key_min']:.3f}, {m['key_max']:.3f}] | "
                          f"{m['gpu_ms_mean']:.2f} / {m['gpu_ms_p95']:.2f} | "

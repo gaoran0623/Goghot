@@ -79,7 +79,7 @@ vec3 cosine_dir(vec3 n, vec2 u) {
 // cached indirect). No extra bounce ray (used by fog and reflection rays).
 vec3 shade_simple(vec3 origin, vec3 dir) {
 	if (!trace_hit(origin, dir)) {
-		return fr.sky.rgb;
+		return sky_radiance(dir);
 	}
 	if (hit.backface > 0.5) {
 		return vec3(0.0);
@@ -144,7 +144,7 @@ void main() {
 	vec3 origin = (fr.view_to_world * vec4(probe_ray_origin(pr), 1.0)).xyz;
 	vec3 dir = normalize(v2w * probe_ray_dir(probe_index, lane, pr.normal.xyz));
 
-	vec3 radiance = fr.sky.rgb;
+	vec3 radiance = sky_radiance(dir);
 	if (trace_hit(origin, dir)) {
 		if (hit.backface > 0.5) {
 			radiance = vec3(0.0);
@@ -161,7 +161,7 @@ void main() {
 			uint seed = ray_index * 9176u + uint(fr.frame) * 26699u;
 			vec3 d2 = cosine_dir(n, vec2(hash_f(seed), hash_f(seed + 7u)));
 			vec3 o2 = p + n * max(0.002, hit.t * 1e-4);
-			vec3 incoming = fr.sky.rgb;
+			vec3 incoming = sky_radiance(d2);
 			if (trace_hit(o2, d2)) {
 				if (hit.backface > 0.5) {
 					incoming = vec3(0.0);

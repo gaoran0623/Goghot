@@ -95,6 +95,12 @@ protected:
 	godot::Ref<GoghotScreenProbeGI> gi;
 	bool editor_preview = false;
 	godot::Node *_scene_root() const;
+	// Light units, refreshed every update: physical light units project setting and the active camera
+	// attributes' exposure normalization (exposure_multiplier, times the physical camera / sensitivity
+	// normalization when physical units are on), which Godot applies to lights and emission.
+	bool physical_units = false;
+	float exposure_scale = 1.0f;
+	void _update_units();
 	std::unordered_map<uint64_t, std::shared_ptr<const GIMeshCPU>> mesh_cache;
 	struct TextureStats {
 		godot::Color average;

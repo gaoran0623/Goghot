@@ -28,7 +28,7 @@ vec3 shade_voxel_ray(vec3 o, vec3 d, float offset) {
 	for (int k = 0; k < 4; k++) {
 		float t = vox_trace(start, d, 1e4, 0.5, ht, hc);
 		if (t < 0.0) {
-			return fr.sky.rgb;
+			return sky_radiance(d);
 		}
 		vec3 hn;
 		int face = vox_face_for_ray(ht, d, hn);

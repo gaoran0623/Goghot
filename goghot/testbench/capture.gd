@@ -17,6 +17,15 @@
 #   sky color L    -> background radiance L in both
 extends SceneTree
 
+# Physical light units (run.py --units physical writes override.cfg): same rendered result as the
+# default mode, expressed in photometric units. Camera: CameraAttributesPractical (ISO 100, exposure
+# normalization N = 100 / 3072007); sun lux = pi / N, omni lumens = 4 pi^2 / N, spot lumens = pi^2 / N,
+# emission nits = 1 / N, background intensity = 1 / N (energies / multipliers as in the default mode).
+var soak_seconds := 0.0 # > 0: soak test instead of a capture (see _soak)
+var physical := false
+var anim_nodes := [] # [node, object spec] of objects with keys
+const PHYS_N := 100.0 / 3072007.0
+
 const WARMUP_FRAMES := 90 # long enough for GI history + multi-bounce feedback to converge (flicker = steady state)
 
 var spec: Dictionary
@@ -156,6 +165,8 @@ func _build(root: Node3D) -> void:
 			var eimg := Image.load_from_file(ProjectSettings.globalize_path("res://assets/" + str(m.emission_texture)))
 			mat.emission_texture = ImageTexture.create_from_image(eimg)
 			mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+		if physical and mat.emission_enabled:
+			mat.emission_intensity = 1.0 / PHYS_N
 		mats[name] = mat
 
 	for o: Dictionary in spec.objects:
@@ -190,6 +201,8 @@ func _build(root: Node3D) -> void:
 		else:
 			mi.rotation_degrees.y = o.get("rot_y", 0.0)
 		root.add_child(mi)
+		if o.has("keys"):
+			anim_nodes.append([mi, o])
 
 	for l: Dictionary in spec.lights:
 		var node: Light3D
@@ -216,6 +229,13 @@ func _build(root: Node3D) -> void:
 				push_error("unknown light type " + str(l.type))
 				continue
 		node.shadow_enabled = true
+		if physical:
+			if node is DirectionalLight3D:
+				node.light_intensity_lux = PI / PHYS_N
+			elif node is SpotLight3D:
+				node.light_intensity_lumens = PI * PI / PHYS_N
+			else:
+				node.light_intensity_lumens = 4.0 * PI * PI / PHYS_N
 		root.add_child(node)
 		light_nodes.append([node, l])
 
@@ -228,6 +248,20 @@ func _build(root: Node3D) -> void:
 	env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
 	env.tonemap_mode = Environment.TONE_MAPPER_LINEAR
 	env.tonemap_exposure = 1.0
+	if physical:
+		env.background_intensity = 1.0 / PHYS_N # ambient light color is used unscaled by Godot: unchanged
+	if spec.sky.has("panorama"):
+		# Directional sky: "panorama" (equirectangular, sRGB PNG under assets/), times "energy"; "color" is its
+		# average radiance (used by the rt mode's uniform sky). Ambient (baseline) comes from the sky.
+		var pano := PanoramaSkyMaterial.new()
+		pano.panorama = ImageTexture.create_from_image(Image.load_from_file(ProjectSettings.globalize_path("res://assets/" + str(spec.sky.panorama))))
+		pano.energy_multiplier = spec.sky.get("energy", 1.0)
+		var sky := Sky.new()
+		sky.sky_material = pano
+		env.background_mode = Environment.BG_SKY
+		env.sky = sky
+		env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+		env.ambient_light_sky_contribution = 1.0
 	if spec.has("fog"):
 		# Godot: extinction = density, scattering = albedo * density (matches Cycles scatter+absorption).
 		var fog: Dictionary = spec.fog
@@ -315,6 +349,8 @@ func _build(root: Node3D) -> void:
 	camera.fov = spec.camera.get("fov_y", 50.0)
 	camera.near = 0.05
 	camera.far = 500.0
+	if physical:
+		camera.attributes = CameraAttributesPractical.new() # exposure normalization PHYS_N
 	root.add_child(camera)
 	camera.current = true
 
@@ -390,10 +426,21 @@ func _keyed(o: Dictionary, field: String, f: int) -> Variant:
 
 func _apply_frame(f: int) -> void:
 	_apply_skinned(f)
+	for pair in anim_nodes: # objects with "keys": keyed "center" and / or "visible" (0 / 1)
+		var nd: Node3D = pair[0]
+		var od: Dictionary = pair[1]
+		if od.has("center"):
+			nd.position = _v3(_keyed(od, "center", f))
+		if od.has("visible") or od.get("keys", []).any(func(k): return k.has("visible")):
+			nd.visible = float(_keyed(od, "visible", f)) > 0.5
 	for pair in light_nodes:
 		var node: Light3D = pair[0]
 		var l: Dictionary = pair[1]
 		node.light_color = _col(_keyed(l, "color", f))
+		if physical: # Godot tints lights by their color temperature (6500 K default): divide it out
+			var cc: Color = node.get_correlated_color().srgb_to_linear()
+			var lc: Color = node.light_color.srgb_to_linear()
+			node.light_color = Color(lc.r / cc.r, lc.g / cc.g, lc.b / cc.b).linear_to_srgb()
 		node.light_energy = _keyed(l, "energy", f)
 		if node is DirectionalLight3D:
 			var dir := _v3(_keyed(l, "direction", f)).normalized()
@@ -403,7 +450,7 @@ func _apply_frame(f: int) -> void:
 			if node is SpotLight3D:
 				var sdir := _v3(_keyed(l, "direction", f)).normalized()
 				node.look_at_from_position(node.position, node.position + sdir, Vector3.UP if absf(sdir.y) < 0.99 else Vector3.FORWARD)
-	var sky_col := _col(_keyed(spec.sky, "color", f))
+	var sky_col := _col(_keyed(spec.sky, "color", f)) # (panorama skies: unused by Godot, average for rt mode)
 	env.background_color = sky_col
 	env.ambient_light_color = sky_col
 	if gi_effect:
@@ -449,6 +496,14 @@ func _goghot_timings() -> Dictionary:
 	return out
 
 
+# Frames that get a converged reference: mid-motion and last (when there is motion after the hold).
+func _conv_frames(n: int) -> Array:
+	var hold: int = spec.camera.get("hold_frames", 0)
+	if n - hold < 2:
+		return []
+	return [hold + (n - hold) / 2, n - 1]
+
+
 func _total_frames() -> int:
 	var n: int = spec.camera.get("hold_frames", 0)
 	for i in range(1, spec.camera.path.size()):
@@ -472,8 +527,11 @@ func _initialize() -> void:
 		gi_mode = args[2]
 	if args.size() > 3:
 		exposure_mode = args[3]
+	physical = bool(ProjectSettings.get_setting("rendering/lights_and_shadows/use_physical_light_units", false))
 	if args.size() > 4 and not args[4].is_empty():
 		gi_params = JSON.parse_string(args[4])
+	if args.size() > 5 and not args[5].is_empty():
+		soak_seconds = float(args[5])
 	DirAccess.make_dir_recursive_absolute(out_dir)
 
 	var root := Node3D.new()
@@ -482,7 +540,54 @@ func _initialize() -> void:
 	_run.call_deferred(out_dir)
 
 
+# Soak test: loops the scene's camera path and animation for soak_seconds; every ~10 s logs video
+# memory (RenderingServer total / texture / buffer bytes) and GPU time. Every 60 s it switches the
+# GoghotGI quality preset (Low <-> High, reallocating GI resources) when a GoghotGI node is present.
+func _soak(out_dir: String) -> void:
+	var vp_rid := get_root().get_viewport_rid()
+	RenderingServer.viewport_set_measure_render_time(vp_rid, true)
+	var n := _total_frames()
+	var gi_node: Node = null
+	for c in get_root().find_children("*", "GoghotGI", true, false):
+		gi_node = c
+	var t0 := Time.get_ticks_msec()
+	var samples := []
+	var f := 0
+	var next_log := 0.0
+	var next_switch := 60.0
+	while true:
+		var t := (Time.get_ticks_msec() - t0) / 1000.0
+		if t >= soak_seconds:
+			break
+		var fi := f % n
+		var pt := _camera_at(fi)
+		camera.look_at_from_position(pt[0], pt[1], Vector3.UP)
+		_apply_frame(fi)
+		await RenderingServer.frame_post_draw
+		f += 1
+		if t >= next_log:
+			next_log += 10.0
+			samples.append({
+				"t": t, "frame": f,
+				"vram_total": RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_VIDEO_MEM_USED),
+				"vram_texture": RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TEXTURE_MEM_USED),
+				"vram_buffer": RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_BUFFER_MEM_USED),
+				"gpu_ms": RenderingServer.viewport_get_measured_render_time_gpu(vp_rid),
+			})
+		if gi_node and t >= next_switch:
+			next_switch += 60.0
+			gi_node.quality = 0 if gi_node.quality != 0 else 2
+	var fa := FileAccess.open(out_dir.path_join("soak.json"), FileAccess.WRITE)
+	fa.store_string(JSON.stringify({"seconds": soak_seconds, "frames": f, "samples": samples, "device": RenderingServer.get_video_adapter_name(), "gi_mode": gi_mode}, "	"))
+	fa.close()
+	print("SOAK: %d frames, %d samples" % [f, samples.size()])
+	quit(0)
+
+
 func _run(out_dir: String) -> void:
+	if soak_seconds > 0.0:
+		await _soak(out_dir)
+		return
 	var vp_rid := get_root().get_viewport_rid()
 	RenderingServer.viewport_set_measure_render_time(vp_rid, true)
 
@@ -507,6 +612,17 @@ func _run(out_dir: String) -> void:
 		var img := get_root().get_texture().get_image()
 		img.save_png(out_dir.path_join("frame_%04d.png" % f))
 
+	# Motion lag reference: the same pose (camera, lights, objects of frame f) rendered converged, held
+	# for WARMUP_FRAMES; run.py compares it with the in-motion frame f (ghosting / temporal lag).
+	var conv := _conv_frames(n)
+	for f in conv:
+		var pt2 := _camera_at(f)
+		for k in WARMUP_FRAMES:
+			camera.look_at_from_position(pt2[0], pt2[1], Vector3.UP)
+			_apply_frame(f)
+			await RenderingServer.frame_post_draw
+		get_root().get_texture().get_image().save_png(out_dir.path_join("conv_%04d.png" % f))
+
 	var meta := {
 		"frames": n,
 		"hold_frames": spec.camera.get("hold_frames", 0),
@@ -517,6 +633,7 @@ func _run(out_dir: String) -> void:
 		"gi_mode": gi_mode,
 		"exposure": exposure_mode,
 		"gi_params": gi_params,
+		"conv_frames": conv,
 	}
 	var fa := FileAccess.open(out_dir.path_join("capture.json"), FileAccess.WRITE)
 	fa.store_string(JSON.stringify(meta, "\t"))

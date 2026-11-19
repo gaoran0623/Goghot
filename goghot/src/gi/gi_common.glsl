@@ -49,8 +49,23 @@ layout(set = 0, binding = 0, std140) uniform Frame {
 	vec4 refl_params; // x: max traced roughness, y/z: history frames at roughness 0 / max, w: normal power
 	vec4 vox_origin[3]; // tier B clipmap cascades: xyz world min corner, w voxel size
 	ivec4 vox_params; // x: voxels per axis, y: cascades, z: tier B active, w: bounce rays per voxel face
+	vec4 sky_sh[9]; // L2 spherical harmonics of the sky radiance (linear, world space), used when sky.w > 0.5
 }
 fr;
+
+// Sky radiance seen along world direction d: the SH sky when set (Panorama / Procedural skies), else
+// the uniform sky color. Low frequency on purpose: the sun is traced as a light, not as sky.
+vec3 sky_radiance(vec3 d) {
+	if (fr.sky.w < 0.5) {
+		return fr.sky.rgb;
+	}
+	vec3 r = fr.sky_sh[0].rgb * 0.282095 +
+			fr.sky_sh[1].rgb * (0.488603 * d.y) + fr.sky_sh[2].rgb * (0.488603 * d.z) + fr.sky_sh[3].rgb * (0.488603 * d.x) +
+			fr.sky_sh[4].rgb * (1.092548 * d.x * d.y) + fr.sky_sh[5].rgb * (1.092548 * d.y * d.z) +
+			fr.sky_sh[6].rgb * (0.315392 * (3.0 * d.z * d.z - 1.0)) + fr.sky_sh[7].rgb * (1.092548 * d.x * d.z) +
+			fr.sky_sh[8].rgb * (0.546274 * (d.x * d.x - d.y * d.y));
+	return max(r, vec3(0.0));
+}
 
 // Tier B clipmaps are addressed toroidally: voxel v (0..N-1 from the cascade's min corner) of cascade c
 // is stored at texel ((cell + v) mod N), z offset by c * N, cell = the min corner in voxel units. A

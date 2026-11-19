@@ -84,8 +84,9 @@ struct FrameUBO {
 	float refl_params[4];
 	float vox_origin[3][4];
 	int32_t vox_params[4];
+	float sky_sh[9][4];
 };
-static_assert(sizeof(FrameUBO) == 624, "Frame UBO layout");
+static_assert(sizeof(FrameUBO) == 768, "Frame UBO layout");
 
 void store(const Projection &p_m, float *r_out) {
 	for (int c = 0; c < 4; c++) {
@@ -362,6 +363,12 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 	f.sky[0] = sky_color.r * sky_energy;
 	f.sky[1] = sky_color.g * sky_energy;
 	f.sky[2] = sky_color.b * sky_energy;
+	f.sky[3] = sky_sh.size() == 9 ? 1.0f : 0.0f;
+	for (int i = 0; i < 9 && sky_sh.size() == 9; i++) {
+		f.sky_sh[i][0] = sky_sh[i].r * sky_energy;
+		f.sky_sh[i][1] = sky_sh[i].g * sky_energy;
+		f.sky_sh[i][2] = sky_sh[i].b * sky_energy;
+	}
 	f.rays = CLAMP(rays_per_probe, 1, 32);
 	f.max_adaptive = max_adaptive;
 	f.hzb_levels = hzb_levels;
@@ -723,6 +730,7 @@ void GoghotScreenProbeGI::_bind_methods() {
 	GOGHOT_BIND(Variant::BOOL, jitter_probes, PROPERTY_HINT_NONE, "")
 	GOGHOT_BIND(Variant::COLOR, sky_color, PROPERTY_HINT_NONE, "")
 	GOGHOT_BIND(Variant::FLOAT, sky_energy, PROPERTY_HINT_RANGE, "0,16,0.01")
+	GOGHOT_BIND(Variant::PACKED_COLOR_ARRAY, sky_sh, PROPERTY_HINT_NONE, "")
 	GOGHOT_BIND(Variant::INT, debug_mode, PROPERTY_HINT_ENUM, "Off,No Temporal,No Spatial Filter")
 	GOGHOT_BIND(Variant::BOOL, world_tracing, PROPERTY_HINT_NONE, "")
 	GOGHOT_BIND(Variant::FLOAT, cache_min_cell, PROPERTY_HINT_RANGE, "0.005,1,0.005,suffix:m")

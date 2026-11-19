@@ -83,7 +83,7 @@ vec3 face_lit(ivec3 t, vec3 p, float size, vec3 n, vec3 albedo, vec3 emission) {
 		float rr = sqrt(r1), phi = 2.0 * PI * r2;
 		vec3 dir = normalize(tt * (rr * cos(phi)) + bb * (rr * sin(phi)) + n * sqrt(max(0.0, 1.0 - r1)));
 		float th = vox_trace(p + n * size * 1.5, dir, 1e4, 0.5, ht, hc);
-		vec3 s = fr.sky.rgb;
+		vec3 s = sky_radiance(dir);
 		if (th >= 0.0) {
 			vec3 hn;
 			int face = vox_face_for_ray(ht, dir, hn);

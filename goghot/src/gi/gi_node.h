@@ -74,7 +74,10 @@ private:
 	void _detach();
 	void _sync_effects();
 	void _apply_quality();
-	godot::Color _sky_radiance(const godot::Ref<godot::Environment> &p_env) const;
+	// Panorama SH (unscaled) cached per panorama texture: the image readback and resize are slow.
+	mutable uint64_t pano_sh_id = 0;
+	mutable godot::PackedColorArray pano_sh;
+	godot::Color _sky_radiance(const godot::Ref<godot::Environment> &p_env, godot::PackedColorArray &r_sh) const;
 
 protected:
 	static void _bind_methods();

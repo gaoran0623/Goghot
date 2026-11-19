@@ -88,7 +88,7 @@ void main() {
 		}
 	}
 	if (r.origin.w == 0.0 && fr.rt_enabled == 0) {
-		r.radiance = vec4(fr.sky.rgb, 1.0); // no world tracer: sky
+		r.radiance = vec4(sky_radiance(r.dir.xyz), 1.0); // no world tracer: sky
 		r.origin.w = 1.0;
 	}
 	refl[index] = r;

@@ -33,5 +33,8 @@ void main() {
 			}
 		}
 	}
+	if (result.w == 0.0 && fr.rt_enabled == 0) {
+		result = vec4(sky_radiance(normalize(mat3(fr.view_to_world) * probe_ray_dir(probe_index, lane, pr.normal.xyz))), 1.0); // no world tracer: sky
+	}
 	rays[probe_index * 32u + lane] = result;
 }

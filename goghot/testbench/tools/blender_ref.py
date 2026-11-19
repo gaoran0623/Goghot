@@ -99,6 +99,20 @@ world.use_nodes = True
 bg = world.node_tree.nodes["Background"]
 bg.inputs["Strength"].default_value = 1.0
 scene.world = world
+if "panorama" in spec["sky"]:
+    # Same mapping as Godot's panorama sky (u = atan2(x, -z) / 2pi in Godot axes): Blender's
+    # equirectangular u is Godot's + 1/4, so the lookup direction is rotated by +90 degrees about Z.
+    wt = world.node_tree
+    env_tex = wt.nodes.new("ShaderNodeTexEnvironment")
+    env_tex.image = bpy.data.images.load(os.path.join(os.path.dirname(scene_path), "..", "assets", spec["sky"]["panorama"]))
+    env_tex.interpolation = "Linear"
+    coord = wt.nodes.new("ShaderNodeTexCoord")
+    mapping = wt.nodes.new("ShaderNodeMapping")
+    mapping.inputs["Rotation"].default_value = (0.0, 0.0, math.radians(90.0))
+    wt.links.new(coord.outputs["Generated"], mapping.inputs["Vector"])
+    wt.links.new(mapping.outputs["Vector"], env_tex.inputs["Vector"])
+    wt.links.new(env_tex.outputs["Color"], bg.inputs["Color"])
+    bg.inputs["Strength"].default_value = spec["sky"].get("energy", 1.0)
 
 # Materials.
 mats = {}
@@ -148,6 +162,7 @@ for name, m in spec["materials"].items():
 
 # Objects.
 skinned_objs = []
+anim_objs = []  # objects with keys: keyed center / visible, as capture.gd _apply_frame
 
 
 def skin_pose(o, m, f):
@@ -270,6 +285,8 @@ for o in spec["objects"]:
     else:
         raise ValueError("unknown object type " + o["type"])
     ob.data.materials.append(mats[o["material"]])
+    if "keys" in o:
+        anim_objs.append((ob, o))
     if o["type"] == "skinned":
         for poly in ob.data.polygons:
             poly.use_smooth = False
@@ -300,6 +317,11 @@ for i, l in enumerate(spec["lights"]):
 
 
 def apply_frame(f):
+    for ob, o in anim_objs:
+        if "center" in o:
+            ob.location = v3(keyed(o, "center", f))
+        if "visible" in o or any("visible" in k for k in o["keys"]):
+            ob.hide_render = keyed(o, "visible", f) <= 0.5
     for ob, o, m in skinned_objs:
         for vert, co in zip(ob.data.vertices, skin_pose(o, m, f)):
             vert.co = co
@@ -315,7 +337,8 @@ def apply_frame(f):
             ob.location = v3(keyed(l, "position", f))
             if l["type"] == "spot":
                 ob.rotation_euler = v3(keyed(l, "direction", f)).normalized().to_track_quat("-Z", "Y").to_euler()
-    bg.inputs["Color"].default_value = (*keyed(spec["sky"], "color", f), 1.0)
+    if "panorama" not in spec["sky"]:
+        bg.inputs["Color"].default_value = (*keyed(spec["sky"], "color", f), 1.0)
 
 
 # Fog: a cube of side 2*length around the scene origin approximates Godot's froxel fog range.
