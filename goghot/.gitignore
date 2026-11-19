@@ -12,3 +12,5 @@ gen/
 reports/*_sweep/
 reports/*scratch*/
 reports/*_check/
+# Third-party test assets fetched by testbench/tools/fetch_assets.py (not redistributed here).
+testbench/assets/sponza/

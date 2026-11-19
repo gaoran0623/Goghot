@@ -7,6 +7,9 @@ references, computes metrics and writes a report to goghot/reports/<timestamp>_<
 
 Metrics:
   flip / ssim     vs Cycles reference, on reference frames (static frame 0, mid-move, last)
+  flip_norm       FLIP after scaling the image (linear) so its mean luminance matches the reference:
+                  structure errors (leaks, occlusion, color bleeding) without the overall brightness bias
+  lum_ratio       mean linear luminance, image / reference (overall brightness bias; 1 = none)
   flicker         mean abs diff between consecutive frames during the static hold (0..255 scale)
   gpu_ms          mean / p95 viewport GPU time over all captured frames (whole frame, not only GI)
 """
@@ -33,6 +36,51 @@ REF_CACHE = BENCH / ".refcache"  # gitignored; keyed by scene hash + resolution 
 
 def load_rgb(path):
     return np.asarray(Image.open(path).convert("RGB"), dtype=np.float32) / 255.0
+
+
+def srgb_to_linear(a):
+    return np.where(a <= 0.04045, a / 12.92, ((a + 0.055) / 1.055) ** 2.4)
+
+
+def linear_to_srgb(a):
+    return np.where(a <= 0.0031308, a * 12.92, 1.055 * np.power(np.maximum(a, 0.0), 1.0 / 2.4) - 0.055)
+
+
+LUM = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+
+
+def brightness_normalized(test, ref):
+    """(test scaled in linear space to the reference's mean luminance, luminance ratio test / ref)."""
+    tl, rl = srgb_to_linear(test), srgb_to_linear(ref)
+    t_mean, r_mean = float((tl @ LUM).mean()), float((rl @ LUM).mean())
+    ratio = t_mean / max(r_mean, 1e-6)
+    scaled = np.clip(linear_to_srgb(tl / max(ratio, 1e-6)), 0.0, 1.0).astype(np.float32)
+    return scaled, ratio
+
+
+def ref_scores(frames_dir, ref_dir, spec, out, save_maps=True):
+    import flip_evaluator as flip
+    from skimage.metrics import structural_similarity
+
+    flips, norms, ratios, ssims = [], [], [], []
+    for f in ref_frames(spec):
+        test = load_rgb(frames_dir / f"frame_{f:04d}.png")
+        ref = load_rgb(ref_dir / f"ref_{f:04d}.png")
+        err_map, mean_flip, _ = flip.evaluate(ref, test, "LDR")
+        scaled, ratio = brightness_normalized(test, ref)
+        _, mean_norm, _ = flip.evaluate(ref, scaled, "LDR")
+        ssim = structural_similarity(ref, test, channel_axis=2, data_range=1.0)
+        if save_maps:
+            Image.fromarray((np.clip(err_map, 0, 1) * 255).astype(np.uint8)).save(frames_dir.parent / f"flip_{f:04d}.png")
+        out["per_frame"][f] = {"flip": float(mean_flip), "flip_norm": float(mean_norm), "lum_ratio": ratio, "ssim": float(ssim)}
+        flips.append(mean_flip)
+        norms.append(mean_norm)
+        ratios.append(ratio)
+        ssims.append(ssim)
+    out["flip"] = float(np.mean(flips))
+    out["flip_norm"] = float(np.mean(norms))
+    out["lum_ratio"] = float(np.mean(ratios))
+    out["ssim"] = float(np.mean(ssims))
 
 
 def find_blender(explicit):
@@ -83,23 +131,9 @@ def render_refs(blender, scene_path, spec, w, h, samples, logs_dir):
 
 
 def metrics(frames_dir, ref_dir, spec, cap):
-    import flip_evaluator as flip
-    from skimage.metrics import structural_similarity
-
     out = {"per_frame": {}}
     if ref_dir:
-        flips, ssims = [], []
-        for f in ref_frames(spec):
-            test = load_rgb(frames_dir / f"frame_{f:04d}.png")
-            ref = load_rgb(ref_dir / f"ref_{f:04d}.png")
-            err_map, mean_flip, _ = flip.evaluate(ref, test, "LDR")
-            ssim = structural_similarity(ref, test, channel_axis=2, data_range=1.0)
-            Image.fromarray((np.clip(err_map, 0, 1) * 255).astype(np.uint8)).save(frames_dir.parent / f"flip_{f:04d}.png")
-            out["per_frame"][f] = {"flip": float(mean_flip), "ssim": float(ssim)}
-            flips.append(mean_flip)
-            ssims.append(ssim)
-        out["flip"] = float(np.mean(flips))
-        out["ssim"] = float(np.mean(ssims))
+        ref_scores(frames_dir, ref_dir, spec, out)
 
     hold = spec["camera"].get("hold_frames", 0)
     if hold >= 2:
@@ -124,8 +158,7 @@ def metrics(frames_dir, ref_dir, spec, cap):
     keys = []
     for f in range(cap["frames"]):
         img = load_rgb(frames_dir / f"frame_{f:04d}.png")
-        lin = np.where(img <= 0.04045, img / 12.92, ((img + 0.055) / 1.055) ** 2.4)
-        l = lin @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+        l = srgb_to_linear(img) @ LUM
         keys.append(float(np.exp(np.log(np.maximum(l, 1e-4)).mean())))
     out["key_series"] = keys
     out["key_mean"] = float(np.mean(keys))
@@ -150,7 +183,7 @@ def fmt(v, spec="{:.4f}"):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--godot", required=True, help="path to the Godot editor binary")
+    ap.add_argument("--godot", help="path to the Godot editor binary")
     ap.add_argument("--blender", help="path to blender.exe (auto-detected)")
     ap.add_argument("--tag", default="baseline")
     ap.add_argument("--scenes", help="comma-separated scene names (default: all)")
@@ -162,7 +195,13 @@ def main():
                     help="auto = histogram auto exposure; FLIP/SSIM vs Cycles are skipped (not comparable), key metrics reported")
     ap.add_argument("--gi-params", default="", help='JSON property overrides for the GI effect, e.g. {"probe_spacing": 16}')
     ap.add_argument("--gi", default="baseline", help="GI mode passed to capture.gd (baseline, inject_identity, inject_red, screen_probe, rt, node, godot_ssil, godot_sdfgi, godot_voxelgi, godot_voxelgi_interior)")
+    ap.add_argument("--rescore", nargs="+", metavar="REPORT_DIR",
+                    help="recompute the reference metrics of existing reports from their saved frames (no rendering); --godot not needed")
     args = ap.parse_args()
+    if args.rescore:
+        return rescore(args)
+    if not args.godot:
+        ap.error("--godot is required")
     args.godot = str(Path(args.godot).resolve())
 
     scenes = sorted((BENCH / "scenes").glob("*.json"))
@@ -217,26 +256,67 @@ def main():
                 sheet.paste(t, (x, 0))
                 x += t.width
             sheet.save(report_dir / name / f"compare_{f:04d}.png")
-        print(f"[{name}] flip={fmt(m.get('flip'))} ssim={fmt(m.get('ssim'))} flicker={fmt(m.get('flicker'), '{:.3f}')} flicker_px={fmt(m.get('flicker_px'), '{:.2f}')}% drift={fmt(m.get('drift'), '{:.2f}')} gpu={m['gpu_ms_mean']:.2f}ms goghot={m['goghot_ms']:.3f}ms")
+        print(f"[{name}] flip={fmt(m.get('flip'))} flip_norm={fmt(m.get('flip_norm'))} lum={fmt(m.get('lum_ratio'), '{:.3f}')} ssim={fmt(m.get('ssim'))} flicker={fmt(m.get('flicker'), '{:.3f}')} flicker_px={fmt(m.get('flicker_px'), '{:.2f}')}% drift={fmt(m.get('drift'), '{:.2f}')} gpu={m['gpu_ms_mean']:.2f}ms goghot={m['goghot_ms']:.3f}ms")
 
+    meta = {"tag": args.tag, "stamp": stamp, "gi": args.gi, "gi_params": args.gi_params, "exposure": args.exposure,
+            "width": args.width, "height": args.height, "ref_samples": args.ref_samples}
+    (report_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    write_report(report_dir, results, meta)
+    print(f"report: {report_dir}")
+    return 0 if all("error" not in m for m in results.values()) else 1
+
+
+def write_report(report_dir, results, meta, title=None):
     (report_dir / "results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
-    lines = [f"# Test bench: {args.tag} ({stamp}), GI `{args.gi}` {args.gi_params}, exposure `{args.exposure}`", "",
-             f"Resolution {args.width}x{args.height}, Cycles {args.ref_samples} spp. "
-             "Images: `<scene>/compare_NNNN.png` = Godot | Cycles | FLIP.", "",
-             "| scene | FLIP ↓ | SSIM ↑ | flicker ↓ (static, /255) | flicker px % ↓ (detrended std > 1/255) | drift /255 (over hold) | key mean [min, max] | GPU ms mean / p95 (whole frame) | goghot passes ms |",
-             "|---|---|---|---|---|---|---|---|---|"]
+    title = title or f"# Test bench: {meta['tag']} ({meta['stamp']}), GI `{meta['gi']}` {meta['gi_params']}, exposure `{meta['exposure']}`"
+    lines = [title, "",
+             f"Resolution {meta['width']}x{meta['height']}, Cycles {meta['ref_samples']} spp. "
+             "Images: `<scene>/compare_NNNN.png` = Godot | Cycles | FLIP. "
+             "FLIP norm = FLIP after matching the mean luminance to the reference; lum = mean luminance / reference.", "",
+             "| scene | FLIP ↓ | FLIP norm ↓ | lum | SSIM ↑ | flicker ↓ (static, /255) | flicker px % ↓ (detrended std > 1/255) | drift /255 (over hold) | key mean [min, max] | GPU ms mean / p95 (whole frame) | goghot passes ms |",
+             "|---|---|---|---|---|---|---|---|---|---|---|"]
     for name, m in results.items():
         if "error" in m:
-            lines.append(f"| {name} | error: {m['error']} | | | | | | | |")
+            lines.append(f"| {name} | error: {m['error']} | | | | | | | | | |")
         else:
-            lines.append(f"| {name} | {fmt(m.get('flip'))} | {fmt(m.get('ssim'))} | {fmt(m.get('flicker'), '{:.3f}')} | "
-                         f"{fmt(m.get('flicker_px'), '{:.2f}')} | {fmt(m.get('drift'), '{:.2f}')} | "
+            lines.append(f"| {name} | {fmt(m.get('flip'))} | {fmt(m.get('flip_norm'))} | {fmt(m.get('lum_ratio'), '{:.3f}')} | {fmt(m.get('ssim'))} | "
+                         f"{fmt(m.get('flicker'), '{:.3f}')} | {fmt(m.get('flicker_px'), '{:.2f}')} | {fmt(m.get('drift'), '{:.2f}')} | "
                          f"{m['key_mean']:.3f} [{m['key_min']:.3f}, {m['key_max']:.3f}] | "
                          f"{m['gpu_ms_mean']:.2f} / {m['gpu_ms_p95']:.2f} | "
                          + (", ".join(f"{k} {v:.3f}" for k, v in m["pass_ms"].items()) or "—") + " |")
     (report_dir / "README.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"report: {report_dir}")
-    return 0 if all("error" not in m for m in results.values()) else 1
+
+
+def rescore(args):
+    """Recompute flip / flip_norm / lum_ratio / ssim of existing reports from their saved frames and
+    the cached Cycles references (references must exist: same scene file and blender_ref.py)."""
+    for d in args.rescore:
+        report_dir = Path(d).resolve()
+        results = json.loads((report_dir / "results.json").read_text(encoding="utf-8"))
+        meta_path = report_dir / "meta.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else None
+        w, h, samples = (meta["width"], meta["height"], meta["ref_samples"]) if meta else (args.width, args.height, args.ref_samples)
+        for name, m in results.items():
+            if "error" in m:
+                continue
+            scene_path = BENCH / "scenes" / f"{name}.json"
+            spec = json.loads(scene_path.read_text(encoding="utf-8"))
+            key = hashlib.sha1(scene_path.read_bytes() + (HERE / "blender_ref.py").read_bytes()).hexdigest()[:12]
+            ref_dir = REF_CACHE / f"{name}_{key}_{w}x{h}_s{samples}"
+            if not all((ref_dir / f"ref_{f:04d}.png").exists() for f in ref_frames(spec)):
+                print(f"{report_dir.name} [{name}] no cached reference, skipped")
+                continue
+            m.setdefault("per_frame", {})
+            m["per_frame"] = {}
+            ref_scores(report_dir / name / "frames", ref_dir, spec, m, save_maps=False)
+            print(f"{report_dir.name} [{name}] flip={m['flip']:.4f} flip_norm={m['flip_norm']:.4f} lum={m['lum_ratio']:.3f}")
+        title = None
+        if meta is None:  # report from before meta.json: keep its original title line
+            readme = report_dir / "README.md"
+            title = readme.read_text(encoding="utf-8").splitlines()[0] if readme.exists() else f"# Test bench: {report_dir.name}"
+            meta = {"width": w, "height": h, "ref_samples": samples}
+        write_report(report_dir, results, meta, title)
+    return 0
 
 
 if __name__ == "__main__":

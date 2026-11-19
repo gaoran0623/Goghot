@@ -49,9 +49,17 @@ python -m SCons platform=windows target=editor dev_build=yes compiledb=yes d3d12
 bin/godot.windows.editor.dev.x86_64.console.exe --path goghot/demos/rt_smoke --rendering-driver vulkan --script res://rt_smoke.gd -- rt_smoke.png
 python -m SCons -C goghot target=template_debug -j11
 bin/godot.windows.editor.dev.x86_64.console.exe --path goghot/testbench --headless --import   # first time: registers the extension
-python goghot/testbench/tools/run.py --godot bin/godot.windows.editor.dev.x86_64.console.exe --tag <name> [--gi baseline|inject_identity|inject_red|screen_probe|rt|node] [--gi-params '{json}'] [--exposure fixed|auto|auto_cpp]
+python goghot/testbench/tools/fetch_assets.py   # first time: third-party assets (Sponza), not in the repo
+python goghot/testbench/tools/run.py --godot bin/godot.windows.editor.dev.x86_64.console.exe --tag <name> [--gi baseline|inject_identity|inject_red|screen_probe|rt|node|godot_ssil|godot_sdfgi|godot_voxelgi|godot_voxelgi_interior] [--gi-params '{json}'] [--exposure fixed|auto|auto_cpp] [--scenes a,b]
+python goghot/testbench/tools/run.py --rescore goghot/reports/<dir> [...]   # recompute FLIP metrics of saved frames
 ```
 
 Clone with `git submodule update --init` for godot-cpp.
 
 Python deps: `scons zstandard numpy pillow scikit-image flip-evaluator`. Blender (any 4.x/5.x) is auto-detected for references.
+
+Reference metrics: `flip` (perceptual difference vs Cycles), `flip_norm` (FLIP after scaling the image to the reference's mean
+luminance: structure errors such as leaks, occlusion and color bleeding, without the overall brightness bias) and `lum_ratio`
+(mean luminance / reference: the brightness bias itself). Cycles is the physically based target, not a look to match pixel
+for pixel; temporal metrics (`flicker_px`, `drift`) and GPU time matter as much. `godot_*` GI modes are native Godot GI with
+default settings, for comparison.

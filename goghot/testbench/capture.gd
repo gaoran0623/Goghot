@@ -41,6 +41,42 @@ func _col(a: Array) -> Color:
 	return Color(a[0], a[1], a[2]).linear_to_srgb()
 
 
+# glTF object: {"type": "gltf", "path": <under assets/>, "center", "rot_y"}. Materials are made pure
+# diffuse like the other scenes and blender_ref.py: Lambert, metallic 0, specular 0 (albedo texture,
+# normal map, alpha mask and double sidedness kept).
+func _load_gltf(o: Dictionary) -> Node3D:
+	var path := ProjectSettings.globalize_path("res://assets/" + str(o.path))
+	var doc := GLTFDocument.new()
+	var state := GLTFState.new()
+	var err := doc.append_from_file(path, state)
+	if err != OK:
+		push_error("glTF load failed: " + path)
+		return Node3D.new()
+	var scn: Node3D = doc.generate_scene(state)
+	scn.position = _v3(o.get("center", [0, 0, 0]))
+	scn.rotation_degrees.y = o.get("rot_y", 0.0)
+	for mi: MeshInstance3D in scn.find_children("*", "MeshInstance3D", true, false):
+		for i in mi.mesh.get_surface_count():
+			var m := mi.mesh.surface_get_material(i) as BaseMaterial3D
+			if m == null:
+				continue
+			m.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT
+			m.metallic = 0.0
+			m.metallic_texture = null
+			m.metallic_specular = 0.0
+	return scn
+
+
+func _local_to_root(n: Node3D, root: Node3D) -> Transform3D:
+	var t := n.transform
+	var p := n.get_parent()
+	while p != null and p != root:
+		if p is Node3D:
+			t = p.transform * t
+		p = p.get_parent()
+	return t
+
+
 func _build(root: Node3D) -> void:
 	var mats := {}
 	for name in spec.materials:
@@ -67,6 +103,9 @@ func _build(root: Node3D) -> void:
 		mats[name] = mat
 
 	for o: Dictionary in spec.objects:
+		if o.type == "gltf":
+			root.add_child(_load_gltf(o))
+			continue
 		var mi := MeshInstance3D.new()
 		match o.type:
 			"box":
@@ -167,9 +206,9 @@ func _build(root: Node3D) -> void:
 		var vgi := VoxelGI.new()
 		var box := AABB()
 		var first := true
-		for c in root.get_children():
-			if c is MeshInstance3D and c.mesh != null:
-				var a: AABB = c.transform * c.get_aabb()
+		for c: MeshInstance3D in root.find_children("*", "MeshInstance3D", true, false):
+			if c.mesh != null:
+				var a: AABB = _local_to_root(c, root) * c.get_aabb()
 				box = a if first else box.merge(a)
 				first = false
 		box = box.grow(0.5)

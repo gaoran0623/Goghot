@@ -161,7 +161,38 @@ def skin_pose(o, m, f):
     return out
 
 
+def load_gltf(o):
+    # Same as capture.gd _load_gltf: pure diffuse (metallic 0, specular 0), textures / normal maps /
+    # alpha mask kept. The importer converts glTF Y up to Blender Z up like v3().
+    before = set(bpy.data.objects)
+    bpy.ops.import_scene.gltf(filepath=os.path.join(os.path.dirname(scene_path), "..", "assets", o["path"]))
+    new = [ob for ob in bpy.data.objects if ob not in before]
+    pivot = bpy.data.objects.new("gltf_pivot", None)
+    scene.collection.objects.link(pivot)
+    pivot.location = v3(o.get("center", [0, 0, 0]))
+    pivot.rotation_euler = (0.0, 0.0, math.radians(o.get("rot_y", 0.0)))
+    for ob in new:
+        if ob.parent is None:
+            ob.parent = pivot
+    done = set()
+    for ob in new:
+        for slot in getattr(ob, "material_slots", []):
+            mat = slot.material
+            if mat is None or mat.name in done or not mat.use_nodes:
+                continue
+            done.add(mat.name)
+            for node in mat.node_tree.nodes:
+                if node.type == "BSDF_PRINCIPLED":
+                    for name, value in (("Metallic", 0.0), ("Specular IOR Level", 0.0)):
+                        for link in list(node.inputs[name].links):
+                            mat.node_tree.links.remove(link)
+                        node.inputs[name].default_value = value
+
+
 for o in spec["objects"]:
+    if o["type"] == "gltf":
+        load_gltf(o)
+        continue
     if o["type"] == "box":
         bpy.ops.mesh.primitive_cube_add(size=1.0, location=v3(o["center"]))
         ob = bpy.context.active_object
