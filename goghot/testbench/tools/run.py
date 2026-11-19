@@ -139,7 +139,8 @@ def metrics(frames_dir, ref_dir, spec, cap):
     # Goghot passes (RD timestamps); "goghot_ms" = sum of all goghot passes, the GI budget number.
     passes = {k: np.array(v[2:] or v, dtype=np.float64) for k, v in cap.get("pass_ms", {}).items() if v}
     out["pass_ms"] = {k: float(v.mean()) for k, v in passes.items()}
-    out["goghot_ms"] = float(sum(v.mean() for v in passes.values())) if passes else 0.0
+    # Sub-pass markers ("gi.<name>") are nested inside a pass: reported, not added to the total.
+    out["goghot_ms"] = float(sum(v.mean() for k, v in passes.items() if "." not in k)) if passes else 0.0
     return out
 
 

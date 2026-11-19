@@ -166,6 +166,11 @@ void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unorder
 				Ref<ArrayMesh> am = mesh;
 				inst.deformed = (mi->get_skin().is_valid() && !mi->get_skeleton_path().is_empty()) || (am.is_valid() && am->get_blend_shape_count() > 0);
 				inst.rs_instance = mi->get_instance();
+				inst.aabb = inst.xform.xform(mi->get_aabb());
+				if (inst.deformed) {
+					// Animated poses can leave the rest pose bounds: grow them (tier B dirty regions).
+					inst.aabb = inst.aabb.grow(0.25f + 0.5f * inst.aabb.get_longest_axis_size());
+				}
 				for (const GIMeshCPU::Surface &surf : m->surfaces) {
 					inst.materials.push_back(_material_of(mi->get_active_material(surf.source_surface)));
 				}

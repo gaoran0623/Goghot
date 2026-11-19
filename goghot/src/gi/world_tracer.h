@@ -119,8 +119,19 @@ private:
 		uint32_t vertex_base, index_base, tri_count;
 		float albedo[4];
 		float emission[4];
+		godot::AABB aabb; // world bounds
+		uint64_t key = 0; // instance + surface, stable across frames
+		bool deformed = false; // vertices change every frame
+		bool same_as(const VoxDraw &p_o) const;
 	};
 	std::vector<VoxDraw> vox_draws;
+	// Incremental voxelization: last frame's draws (by key) and clipmap origins.
+	std::unordered_map<uint64_t, VoxDraw> vox_prev;
+	float vox_origin_cur[3][4] = {};
+	float vox_origin_prev[3][4] = {};
+	bool vox_valid = false; // volume content matches vox_origin_prev / vox_prev
+	int vox_boxes_last = 0; // boxes rebuilt last frame (stats)
+	godot::RID vox_clear_shader, vox_clear_pipeline;
 	// Voxel attributes (N x N x N*cascades). Two face slots per voxel (0 / 1), see gi_voxel_common.glsl.
 	godot::RID vox_occ, vox_key[2], vox_albedo[2], vox_normal[2], vox_emission[2], vox_lit[2][2]; // vox_lit[face][ping]
 	int vox_res = 0;
@@ -131,6 +142,7 @@ private:
 	bool _init_rt();
 	void _free_voxel();
 	void _ensure_voxel_textures(int p_res);
+	void _voxel_dispatch_pc(int64_t p_list, const VoxDraw *p_draw, uint32_t p_draw_id, const int p_lo[4], const int p_hi[4]);
 	void _rebuild_geometry(const GISceneSnapshot &p_snap);
 	godot::RID _storage(const godot::PackedByteArray &p_data);
 };

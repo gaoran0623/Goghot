@@ -509,6 +509,9 @@ bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap, bool p_deformed,
 				vd.emission[1] = mat.emission.g;
 				vd.emission[2] = mat.emission.b;
 				vd.emission[3] = mat.double_sided ? 1.0f : 0.0f;
+				vd.aabb = gi.aabb;
+				vd.key = (gi.rs_instance.get_id() << 8) ^ uint64_t(s);
+				vd.deformed = def != nullptr;
 				vox_draws.push_back(vd);
 			}
 		}

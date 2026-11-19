@@ -95,8 +95,8 @@ void main() {
 		imageStore(lit_out_neg, t, vec4(0.0));
 		return;
 	}
-	int c = t.z / N;
-	ivec3 v = ivec3(t.xy, t.z - c * N);
+	int c;
+	ivec3 v = vox_local(t, c);
 	float size = vox_size(c);
 	vec3 p = fr.vox_origin[c].xyz + (vec3(v) + 0.5) * size;
 	vec4 na = texelFetch(vox_normal_tex, t, 0);

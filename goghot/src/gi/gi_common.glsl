@@ -52,6 +52,31 @@ layout(set = 0, binding = 0, std140) uniform Frame {
 }
 fr;
 
+// Tier B clipmaps are addressed toroidally: voxel v (0..N-1 from the cascade's min corner) of cascade c
+// is stored at texel ((cell + v) mod N), z offset by c * N, cell = the min corner in voxel units. A
+// scrolled clipmap keeps the voxels it still covers where they are; only the newly entered slabs are
+// rebuilt (and their light history stays valid).
+ivec3 vox_cell(int c) {
+	return ivec3(round(fr.vox_origin[c].xyz / fr.vox_origin[c].w));
+}
+
+ivec3 vox_wrap(ivec3 a) {
+	int N = fr.vox_params.x;
+	return a - N * ivec3(floor(vec3(a) / float(N)));
+}
+
+ivec3 vox_tex(int c, ivec3 v) {
+	ivec3 w = vox_wrap(v + vox_cell(c));
+	return ivec3(w.xy, w.z + c * fr.vox_params.x);
+}
+
+// Inverse of vox_tex: cascade and cascade-local voxel of texel t.
+ivec3 vox_local(ivec3 t, out int c) {
+	int N = fr.vox_params.x;
+	c = t.z / N;
+	return vox_wrap(ivec3(t.xy, t.z - c * N) - vox_cell(c));
+}
+
 struct Probe {
 	vec4 pos; // view-space position, w = 1 valid / 0 invalid
 	vec4 normal; // view-space normal, w = pixel index (x + y * width)

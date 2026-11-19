@@ -49,6 +49,7 @@ struct GIInstance {
 	std::vector<GIMaterial> materials; // per surface
 	bool deformed = false; // skinned / blend shapes: geometry comes from Godot's per-instance buffer
 	godot::RID rs_instance; // RenderingServer instance (for instance_surface_get_vertex_buffer_rd_rid)
+	godot::AABB aabb; // world bounds (deformed: rest pose bounds, grown)
 };
 
 struct GILight {

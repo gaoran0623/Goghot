@@ -8,9 +8,16 @@
 //           rank = how close its plane is to the voxel center; occupancy = max coverage.
 //   pass 1: only the winning triangle writes the slot's albedo / normal / emission.
 // So the result does not depend on GPU scheduling (last-write-wins would flicker every frame).
+// Incremental: each dispatch covers one cascade and only the voxels inside the box pc.box_lo..box_hi
+// (cascade local). The volume persists across frames; the CPU clears (pass 2) and re-voxelizes only
+// boxes that changed (new clipmap slabs after a scroll, moved / deformed / added / removed draws),
+// with every draw overlapping the box. Re-voxelizing the same triangles is idempotent (atomic max of
+// the same keys, the same winners write the same values), so overlapping boxes are fine.
 layout(local_size_x = 64) in;
+#if VOXELIZE_PASS != 2
 layout(set = 0, binding = 1, std430) restrict readonly buffer Positions { float positions[]; };
 layout(set = 0, binding = 2, std430) restrict readonly buffer Indices { uint indices[]; };
+#endif
 layout(r32ui, set = 0, binding = 3) uniform restrict uimage3D vox_occ;
 layout(r32ui, set = 0, binding = 4) uniform restrict uimage3D vox_key0;
 layout(r32ui, set = 0, binding = 5) uniform restrict uimage3D vox_key1;
@@ -31,8 +38,42 @@ layout(push_constant, std430) uniform PC {
 	uint index_base;
 	uint tri_count;
 	uint draw_id; // unique per draw this frame (tie-break of the bids)
+	ivec4 box_lo; // xyz: first voxel (cascade local), w: cascade
+	ivec4 box_hi; // xyz: last voxel, w (pass 2): 1 = also clear the light history
 }
 pc;
+
+#if VOXELIZE_PASS == 2
+layout(rgba16f, set = 0, binding = 12) uniform restrict writeonly image3D lit0a;
+layout(rgba16f, set = 0, binding = 13) uniform restrict writeonly image3D lit0b;
+layout(rgba16f, set = 0, binding = 14) uniform restrict writeonly image3D lit1a;
+layout(rgba16f, set = 0, binding = 15) uniform restrict writeonly image3D lit1b;
+
+void main() {
+	ivec3 ext = pc.box_hi.xyz - pc.box_lo.xyz + 1;
+	uint k = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * 64u;
+	if (k >= uint(ext.x * ext.y * ext.z)) {
+		return;
+	}
+	ivec3 v = pc.box_lo.xyz + ivec3(int(k % uint(ext.x)), int((k / uint(ext.x)) % uint(ext.y)), int(k / uint(ext.x * ext.y)));
+	ivec3 t = vox_tex(pc.box_lo.w, v);
+	imageStore(vox_occ, t, uvec4(0u));
+	imageStore(vox_key0, t, uvec4(0u));
+	imageStore(vox_key1, t, uvec4(0u));
+	imageStore(vox_albedo0, t, vec4(0.0));
+	imageStore(vox_albedo1, t, vec4(0.0));
+	imageStore(vox_normal0, t, vec4(0.0));
+	imageStore(vox_normal1, t, vec4(0.0));
+	imageStore(vox_emission0, t, vec4(0.0));
+	imageStore(vox_emission1, t, vec4(0.0));
+	if (pc.box_hi.w == 1) {
+		imageStore(lit0a, t, vec4(0.0));
+		imageStore(lit0b, t, vec4(0.0));
+		imageStore(lit1a, t, vec4(0.0));
+		imageStore(lit1b, t, vec4(0.0));
+	}
+}
+#else
 
 vec3 world_pos(uint i) {
 	uint b = (pc.vertex_base + i) * 3u;
@@ -87,16 +128,16 @@ void main() {
 	bool positive = n[axis] >= 0.0;
 	bool double_sided = pc.emission.a > 0.5;
 	uint id = ((pc.draw_id & 0xFFu) << 16u) | (tri & 0xFFFFu);
-	int N = fr.vox_params.x;
-	for (int cas = 0; cas < fr.vox_params.y; cas++) {
+	{
+		int cas = pc.box_lo.w;
 		float size = fr.vox_origin[cas].w;
 		vec3 org = fr.vox_origin[cas].xyz;
 		vec3 lo = (min(a, min(b, c)) - org) / size - 0.5;
 		vec3 hi = (max(a, max(b, c)) - org) / size + 0.5;
-		ivec3 vlo = max(ivec3(floor(lo)), ivec3(0));
-		ivec3 vhi = min(ivec3(floor(hi)), ivec3(N - 1));
+		ivec3 vlo = max(ivec3(floor(lo)), pc.box_lo.xyz);
+		ivec3 vhi = min(ivec3(floor(hi)), pc.box_hi.xyz);
 		if (any(greaterThan(vlo, vhi))) {
-			continue;
+			return;
 		}
 		float half_extent = 0.5 * size * (an.x + an.y + an.z); // voxel box projected on n
 		float grow = 0.5 * size;
@@ -119,7 +160,7 @@ void main() {
 			if (!inside && !inside_flipped) {
 				continue;
 			}
-			ivec3 t = ivec3(x, y, z + cas * N);
+			ivec3 t = vox_tex(cas, ivec3(x, y, z));
 			uint rank = 255u - uint(clamp(abs(d) / max(half_extent, 1e-6), 0.0, 1.0) * 254.0);
 			uint key = (rank << 24u) | id;
 #if VOXELIZE_PASS == 0
@@ -134,3 +175,4 @@ void main() {
 		}
 	}
 }
+#endif

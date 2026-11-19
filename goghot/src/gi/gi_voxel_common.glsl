@@ -47,10 +47,6 @@ vec3 vox_coord(int c, vec3 p) {
 	return (p - fr.vox_origin[c].xyz) / fr.vox_origin[c].w;
 }
 
-ivec3 vox_tex(int c, ivec3 v) {
-	return ivec3(v.xy, v.z + c * vox_n());
-}
-
 bool vox_inside(int c, vec3 v, float margin) {
 	return all(greaterThanEqual(v, vec3(margin))) && all(lessThan(v, vec3(float(vox_n()) - margin)));
 }
@@ -90,28 +86,35 @@ float vox_trace(vec3 o, vec3 d, float tmax, float threshold, out ivec3 hit_tex, 
 		vec3 next = (vec3(v) + step(0.0, d) - pc) * inv; // t (in voxels) to the next boundary per axis
 		vec3 delta = abs(inv);
 		float tv = 0.0; // t in voxel units since pc
+		// Toroidal texel of v (see vox_tex), stepped along with v instead of recomputed per step.
+		const int N = vox_n();
+		ivec3 w = vox_wrap(v + vox_cell(c));
+		const int zoff = c * N;
 		while (steps < MAX_STEPS) {
 			steps++;
 			if (any(lessThan(v, ivec3(0))) || any(greaterThanEqual(v, ivec3(vox_n())))) {
 				break; // left this cascade: continue in the next coarser one
 			}
-			if (vox_occupancy(vox_tex(c, v)) > threshold) {
+			if (vox_occupancy(ivec3(w.xy, w.z + zoff)) > threshold) {
 				hit_c = c;
-				hit_tex = vox_tex(c, v);
+				hit_tex = ivec3(w.xy, w.z + zoff);
 				return t + tv * size;
 			}
 			if (next.x < next.y && next.x < next.z) {
 				tv = next.x;
 				next.x += delta.x;
 				v.x += stp.x;
+				w.x = w.x + stp.x == N ? 0 : (w.x + stp.x < 0 ? N - 1 : w.x + stp.x);
 			} else if (next.y < next.z) {
 				tv = next.y;
 				next.y += delta.y;
 				v.y += stp.y;
+				w.y = w.y + stp.y == N ? 0 : (w.y + stp.y < 0 ? N - 1 : w.y + stp.y);
 			} else {
 				tv = next.z;
 				next.z += delta.z;
 				v.z += stp.z;
+				w.z = w.z + stp.z == N ? 0 : (w.z + stp.z < 0 ? N - 1 : w.z + stp.z);
 			}
 			if (t + tv * size > tmax) {
 				return -1.0;
