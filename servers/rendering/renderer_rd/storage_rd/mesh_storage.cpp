@@ -1100,8 +1100,10 @@ RID MeshStorage::mesh_instance_get_surface_vertex_buffer_rd_rid(RID p_mesh_insta
 void MeshStorage::_mesh_instance_add_surface_buffer(MeshInstance *mi, Mesh *mesh, MeshInstance::Surface *s, uint32_t p_surface, uint32_t p_buffer_index) {
 	BitField<RD::BufferCreationBits> creation_bits = RD::BUFFER_CREATION_AS_STORAGE_BIT;
 	if (RD::get_singleton()->has_feature(RD::SUPPORTS_RAYTRACING_PIPELINE) || RD::get_singleton()->has_feature(RD::SUPPORTS_RAY_QUERY)) {
-		// Deformed vertices can be ray traced (BLAS input), see instance_surface_get_vertex_buffer_rd_rid().
+		// Deformed vertices can be ray traced (BLAS input), see instance_surface_get_vertex_buffer_rd_rid();
+		// BLAS builds read the buffer's device address, which needs the device address flag.
 		creation_bits.set_flag(RD::BUFFER_CREATION_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT);
+		creation_bits.set_flag(RD::BUFFER_CREATION_DEVICE_ADDRESS_BIT);
 	}
 	s->vertex_buffer[p_buffer_index] = RD::get_singleton()->vertex_buffer_create(mesh->surfaces[p_surface]->vertex_buffer_size, Vector<uint8_t>(), creation_bits);
 
