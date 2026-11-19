@@ -80,7 +80,9 @@ void main() {
 					float sigma_fast = sigma * sqrt(a / (2.0 - a));
 					// Per channel (a hue shift at constant luminance, e.g. a sunset sky, must be caught
 					// too), with the luminance noise scaled to each channel.
-					vec3 sig_c = sigma_fast * hist.rgb / max(slow_l, 1e-5) + 0.01 * hist.rgb + 1e-5;
+					// Relative floor 0.25% (was 1%): a 1% floor hid lags of a few % (multi-bounce settling after a
+					// light change), which then took the full history to fade.
+					vec3 sig_c = sigma_fast * hist.rgb / max(slow_l, 1e-5) + 0.0025 * hist.rgb + 1e-5;
 					vec3 dev3 = abs(fast - hist.rgb) / sig_c;
 					float dev = max(dev3.r, max(dev3.g, dev3.b));
 					if (dev > fr.response_sigma) {

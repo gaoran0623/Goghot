@@ -69,7 +69,7 @@ class GoghotScreenProbeGI : public godot::CompositorEffect {
 	bool world_tracing = true;
 	float cache_min_cell = 0.05f;
 	float cache_cell_scale = 0.02f;
-	int cache_max_frames = 4; // phase 7 (16 scenes): 4 converges multi-bounce and follows light changes far faster than 16 (cornell 0.091 -> 0.059, dynamic 0.163 -> 0.100), frame-to-frame noise +10-20% but invisible (flicker_px 0)
+	int cache_max_frames = 1; // response (2026-11-19, 16 scenes): 1 follows light / scene changes fastest (dynamic ghost 0.108 -> 0.073 vs 4) at equal flicker; the cache is then a per-frame spatial average, multi-bounce still advances a bounce per frame
 	int cache_mature_frames = 8;
 	bool fog_gi = true; // feed volumetric fog (engine patch 3) when the environment has it enabled
 	int fog_resolution = 32;
