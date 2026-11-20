@@ -1094,7 +1094,10 @@ RID MeshStorage::mesh_instance_get_surface_vertex_buffer_rd_rid(RID p_mesh_insta
 	MeshInstance *mi = mesh_instance_owner.get_or_null(p_mesh_instance);
 	ERR_FAIL_NULL_V(mi, RID());
 	ERR_FAIL_UNSIGNED_INDEX_V((uint32_t)p_surface, mi->surfaces.size(), RID());
-	return mi->surfaces[p_surface].vertex_buffer[mi->surfaces[p_surface].current_buffer];
+	const MeshInstance::Surface &s = mi->surfaces[p_surface];
+	// A buffer is only filled when the instance is deformed (visible instances): until then its content is
+	// uninitialized memory, which must not be ray traced.
+	return s.vertex_buffer_written[s.current_buffer] ? s.vertex_buffer[s.current_buffer] : RID();
 }
 
 void MeshStorage::_mesh_instance_add_surface_buffer(MeshInstance *mi, Mesh *mesh, MeshInstance::Surface *s, uint32_t p_surface, uint32_t p_buffer_index) {
@@ -1105,6 +1108,7 @@ void MeshStorage::_mesh_instance_add_surface_buffer(MeshInstance *mi, Mesh *mesh
 		creation_bits.set_flag(RD::BUFFER_CREATION_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT);
 		creation_bits.set_flag(RD::BUFFER_CREATION_DEVICE_ADDRESS_BIT);
 	}
+	s->vertex_buffer_written[p_buffer_index] = false;
 	s->vertex_buffer[p_buffer_index] = RD::get_singleton()->vertex_buffer_create(mesh->surfaces[p_surface]->vertex_buffer_size, Vector<uint8_t>(), creation_bits);
 
 	Vector<RD::Uniform> uniforms;
@@ -1241,6 +1245,7 @@ void MeshStorage::update_mesh_instances() {
 			if (mi_surface_uniform_set.is_null()) {
 				continue;
 			}
+			mi->surfaces[i].vertex_buffer_written[mi->surfaces[i].current_buffer] = true;
 
 			bool array_is_2d = mi->mesh->surfaces[i]->format & RSE::ARRAY_FLAG_USE_2D_VERTICES;
 

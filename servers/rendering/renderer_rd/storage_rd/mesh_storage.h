@@ -187,6 +187,7 @@ private:
 		RID skeleton;
 		struct Surface {
 			RID vertex_buffer[2];
+			bool vertex_buffer_written[2] = { false, false }; // skinned into at least once (else uninitialized)
 			RID uniform_set[2];
 			uint32_t current_buffer = 0;
 			uint32_t previous_buffer = 0;
