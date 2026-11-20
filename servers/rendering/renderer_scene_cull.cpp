@@ -36,6 +36,7 @@
 #include "core/object/callable_mp.h"
 #include "core/object/worker_thread_pool.h"
 #include "servers/rendering/rendering_light_culler.h"
+#include "servers/rendering/storage/compositor_storage.h"
 #include "servers/rendering/rendering_server.h"
 #include "servers/rendering/rendering_server_default.h"
 
@@ -3351,8 +3352,16 @@ void RendererSceneCull::_render_scene(const RendererSceneRender::CameraData *p_c
 	scene_render->set_scene_pass(render_pass);
 
 	if (p_reflection_probe.is_null()) {
+		// A compositor effect that provides the indirect light replaces SDFGI: it is not created / updated.
+		bool external_gi = false;
+		RendererCompositorStorage *comp_storage = RendererCompositorStorage::get_singleton();
+		if (p_compositor.is_valid() && comp_storage->is_compositor(p_compositor)) {
+			for (const RID &e : comp_storage->compositor_get_compositor_effects(p_compositor, RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_PRE_OPAQUE, true)) {
+				external_gi = external_gi || comp_storage->compositor_effect_get_flag(e, RSE::COMPOSITOR_EFFECT_FLAG_PROVIDES_INDIRECT_LIGHT);
+			}
+		}
 		//no rendering code here, this is only to set up what needs to be done, request regions, etc.
-		scene_render->sdfgi_update(p_render_buffers, p_environment, camera_position); //update conditions for SDFGI (whether its used or not)
+		scene_render->sdfgi_update(p_render_buffers, external_gi ? RID() : p_environment, camera_position); //update conditions for SDFGI (whether its used or not)
 	}
 
 	RENDER_TIMESTAMP("Update Visibility Dependencies");

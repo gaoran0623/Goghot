@@ -1984,6 +1984,13 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		color_framebuffer = rb_data->get_color_pass_fb(color_pass_flags);
 		color_only_framebuffer = rb_data->get_color_only_fb();
 		samplers = rb->get_samplers();
+
+		if (ce_provides_indirect_light) {
+			// An external GI effect replaces the built-in GI for this view: SDFGI (not even created, see
+			// RendererSceneCull::_render_scene) and VoxelGI are not rendered.
+			using_sdfgi = false;
+			using_voxelgi = false;
+		}
 	}
 
 	p_render_data->scene_data->emissive_exposure_normalization = -1.0;
@@ -1997,8 +2004,12 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	// May have changed due to the above (light buffer enlarged, as an example).
 	_update_render_base_uniform_set();
 
-	if (is_reflection_probe || using_sdfgi || using_voxelgi) {
-		ce_provides_indirect_light = false; // Built-in GI owns the GI buffers.
+	if (is_reflection_probe) {
+		ce_provides_indirect_light = false;
+	}
+	if (ce_provides_indirect_light && rb->has_texture(RB_SCOPE_GI, RB_TEX_AMBIENT) &&
+			!(RD::get_singleton()->texture_get_format(rb->get_texture(RB_SCOPE_GI, RB_TEX_AMBIENT)).usage_bits & RD::TEXTURE_USAGE_CAN_COPY_TO_BIT)) {
+		rb->clear_context(RB_SCOPE_GI); // created by the built-in GI before the effect took over
 	}
 	if (ce_provides_indirect_light && !rb->has_texture(RB_SCOPE_GI, RB_TEX_AMBIENT)) {
 		uint32_t usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT;
