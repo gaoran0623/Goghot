@@ -27,6 +27,7 @@
   5. GI 场景数据直通：引擎每帧把场景实例数据（变换、mesh、材质、蒙皮缓冲、变动版本号）打包给 GI，TLAS 可直接从打包缓冲构建（取代扩展侧遍历 SceneTree 收集与逐实例对象调用；2026-11-20 用户同意）
   6. 内置自动曝光：亮度缩减时 NaN/Inf/负值像素按黑色计、损坏的历史亮度自动恢复（2026-11-20 用户同意）
   7. Environment 增加 Goghot GI 选项（与 SDFGI 并列，可在 WorldEnvironment / 相机 Environment 勾选）：扩展注册全局 GI 效果，勾选的视图自动套用，无需节点或 Compositor（2026-11-20 用户同意）
+  8. 应用图标换成 Goghot 图标（`platform/windows/godot*.ico`、`main/app_icon.png`；源图 `goghot/docs/goghot_icon.png`；2026-11-20 用户要求）
 - **主体全部放在 GDExtension**（仓库根目录 `goghot/`）：探针、追踪、缓存、降噪、曝光。
 - commit 前缀：引擎补丁用 `[engine]`，扩展用 `[goghot]`，二者不混在同一个 commit。
 - 不向上游提交 PR（Godot 不接受 AI 生成代码）。
