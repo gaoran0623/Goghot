@@ -46,7 +46,9 @@ void main() {
 	highp vec3 source_color = vec3(0.0);
 	for (int i = src_pos.x; i < next_pos.x; i++) {
 		for (int j = src_pos.y; j < next_pos.y; j++) {
-			source_color += texelFetch(source_exposure, ivec2(i, j), 0).rgb;
+			highp vec3 c = texelFetch(source_exposure, ivec2(i, j), 0).rgb;
+			// NaN / Inf / negative texels count as black (one of them would make the whole average NaN / Inf).
+			source_color += (any(isnan(c)) || any(isinf(c))) ? vec3(0.0) : max(c, vec3(0.0));
 		}
 	}
 
@@ -68,6 +70,9 @@ void main() {
 
 	// Now smooth to our transition
 	highp float prev_lum = texelFetch(prev_luminance, ivec2(0, 0), 0).r; //1 pixel previous luminance
+	if (isnan(prev_lum) || isinf(prev_lum)) {
+		prev_lum = luminance;
+	}
 	luminance = prev_lum + (luminance - prev_lum) * clamp(settings.exposure_adjust, 0.0, 1.0);
 #endif
 }

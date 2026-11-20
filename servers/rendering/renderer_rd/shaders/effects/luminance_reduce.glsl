@@ -41,13 +41,16 @@ void main() {
 	uint t = gl_LocalInvocationID.y * BLOCK_SIZE + gl_LocalInvocationID.x;
 	ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
 
-	if (any(lessThan(pos, params.source_size))) {
+	if (all(lessThan(pos, params.source_size))) {
 #ifdef READ_TEXTURE
 		vec3 v = texelFetch(source_texture, pos, 0).rgb;
-		tmp_data[t] = max(v.r, max(v.g, v.b));
+		float l = max(v.r, max(v.g, v.b));
 #else
-		tmp_data[t] = imageLoad(source_luminance, pos).r;
+		float l = imageLoad(source_luminance, pos).r;
 #endif
+		// A single NaN / Inf pixel (broken shader, division by zero) would make the whole average NaN / Inf
+		// and flash the exposure: such pixels count as black. Negative values too.
+		tmp_data[t] = (isnan(l) || isinf(l)) ? 0.0 : max(l, 0.0);
 	} else {
 		tmp_data[t] = 0.0;
 	}
@@ -75,6 +78,9 @@ void main() {
 		pos /= ivec2(BLOCK_SIZE);
 #ifdef WRITE_LUMINANCE
 		float prev_lum = texelFetch(prev_luminance, ivec2(0, 0), 0).r; //1 pixel previous exposure
+		if (isnan(prev_lum) || isinf(prev_lum)) {
+			prev_lum = avg; // recover instead of keeping a broken history forever
+		}
 		avg = clamp(prev_lum + (avg - prev_lum) * params.exposure_adjust, params.min_luminance, params.max_luminance);
 #endif
 		imageStore(dest_luminance, pos, vec4(avg));
