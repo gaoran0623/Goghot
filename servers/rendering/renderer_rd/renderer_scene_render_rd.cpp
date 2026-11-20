@@ -257,7 +257,8 @@ Ref<RenderSceneBuffers> RendererSceneRenderRD::render_buffers_create() {
 bool RendererSceneRenderRD::_compositor_effects_has_flag(const RenderDataRD *p_render_data, RSE::CompositorEffectFlags p_flag, RSE::CompositorEffectCallbackType p_callback_type) {
 	RendererCompositorStorage *comp_storage = RendererCompositorStorage::get_singleton();
 
-	if (p_render_data->compositor.is_null()) {
+	const bool goghot_gi = comp_storage->has_goghot_gi_effects() && p_render_data->environment.is_valid() && environment_get_goghot_gi_enabled(p_render_data->environment);
+	if (p_render_data->compositor.is_null() && !goghot_gi) {
 		return false;
 	}
 
@@ -265,8 +266,8 @@ bool RendererSceneRenderRD::_compositor_effects_has_flag(const RenderDataRD *p_r
 		return false;
 	}
 
-	ERR_FAIL_COND_V(!comp_storage->is_compositor(p_render_data->compositor), false);
-	Vector<RID> re_rids = comp_storage->compositor_get_compositor_effects(p_render_data->compositor, p_callback_type, true);
+	// The compositor may be invalid when only Goghot GI provides effects (see get_view_effects).
+	Vector<RID> re_rids = comp_storage->get_view_effects(p_render_data->compositor, goghot_gi, p_callback_type, true);
 
 	for (RID rid : re_rids) {
 		if (comp_storage->compositor_effect_get_flag(rid, p_flag)) {
@@ -280,7 +281,8 @@ bool RendererSceneRenderRD::_compositor_effects_has_flag(const RenderDataRD *p_r
 bool RendererSceneRenderRD::_has_compositor_effect(RSE::CompositorEffectCallbackType p_callback_type, const RenderDataRD *p_render_data) {
 	RendererCompositorStorage *comp_storage = RendererCompositorStorage::get_singleton();
 
-	if (p_render_data->compositor.is_null()) {
+	const bool goghot_gi = comp_storage->has_goghot_gi_effects() && p_render_data->environment.is_valid() && environment_get_goghot_gi_enabled(p_render_data->environment);
+	if (p_render_data->compositor.is_null() && !goghot_gi) {
 		return false;
 	}
 
@@ -288,9 +290,9 @@ bool RendererSceneRenderRD::_has_compositor_effect(RSE::CompositorEffectCallback
 		return false;
 	}
 
-	ERR_FAIL_COND_V(!comp_storage->is_compositor(p_render_data->compositor), false);
+	// The compositor may be invalid when only Goghot GI provides effects (see get_view_effects).
 
-	Vector<RID> effects = comp_storage->compositor_get_compositor_effects(p_render_data->compositor, p_callback_type, true);
+	Vector<RID> effects = comp_storage->get_view_effects(p_render_data->compositor, goghot_gi, p_callback_type, true);
 
 	return effects.size() > 0;
 }
@@ -298,7 +300,8 @@ bool RendererSceneRenderRD::_has_compositor_effect(RSE::CompositorEffectCallback
 void RendererSceneRenderRD::_process_compositor_effects(RSE::CompositorEffectCallbackType p_callback_type, const RenderDataRD *p_render_data) {
 	RendererCompositorStorage *comp_storage = RendererCompositorStorage::get_singleton();
 
-	if (p_render_data->compositor.is_null()) {
+	const bool goghot_gi = comp_storage->has_goghot_gi_effects() && p_render_data->environment.is_valid() && environment_get_goghot_gi_enabled(p_render_data->environment);
+	if (p_render_data->compositor.is_null() && !goghot_gi) {
 		return;
 	}
 
@@ -306,9 +309,9 @@ void RendererSceneRenderRD::_process_compositor_effects(RSE::CompositorEffectCal
 		return;
 	}
 
-	ERR_FAIL_COND(!comp_storage->is_compositor(p_render_data->compositor));
+	// The compositor may be invalid when only Goghot GI provides effects (see get_view_effects).
 
-	Vector<RID> re_rids = comp_storage->compositor_get_compositor_effects(p_render_data->compositor, p_callback_type, true);
+	Vector<RID> re_rids = comp_storage->get_view_effects(p_render_data->compositor, goghot_gi, p_callback_type, true);
 
 	for (RID rid : re_rids) {
 		Callable callback = comp_storage->compositor_effect_get_callback(rid);

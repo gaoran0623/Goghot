@@ -57,6 +57,9 @@ private:
 
 	mutable RID_Owner<Compositor, true> compositor_owner;
 
+	// Goghot GI: effects registered by the extension, added to every view whose environment enables it.
+	Vector<RID> goghot_gi_effects;
+
 public:
 	static RendererCompositorStorage *get_singleton() { return singleton; }
 	int get_num_compositor_effects_with_motion_vectors() const { return num_compositor_effects_with_motion_vectors; }
@@ -94,4 +97,10 @@ public:
 
 	void compositor_set_compositor_effects(RID p_compositor, const Vector<RID> &p_effects);
 	Vector<RID> compositor_get_compositor_effects(RID p_compositor, RSE::CompositorEffectCallbackType p_callback_type = RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_ANY, bool p_enabled_only = true) const;
+
+	void goghot_gi_set_effects(const Vector<RID> &p_effects) { goghot_gi_effects = p_effects; }
+	bool has_goghot_gi_effects() const { return !goghot_gi_effects.is_empty(); }
+	// The effects of a view: its compositor's (p_compositor may be invalid), then the Goghot GI effects when
+	// its environment enables Goghot GI (p_goghot_gi).
+	Vector<RID> get_view_effects(RID p_compositor, bool p_goghot_gi, RSE::CompositorEffectCallbackType p_callback_type, bool p_enabled_only = true) const;
 };

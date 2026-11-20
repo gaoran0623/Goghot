@@ -402,6 +402,22 @@ float RendererSceneRender::environment_get_volumetric_fog_gi_volume_half_extent(
 	return environment_storage.environment_get_volumetric_fog_gi_volume_half_extent(p_env);
 }
 
+void RendererSceneRender::environment_set_goghot_gi(RID p_env, bool p_enable, int p_quality) {
+	environment_storage.environment_set_goghot_gi(p_env, p_enable, p_quality);
+}
+
+bool RendererSceneRender::environment_get_goghot_gi_enabled(RID p_env) const {
+	return environment_storage.environment_get_goghot_gi_enabled(p_env);
+}
+
+int RendererSceneRender::environment_get_goghot_gi_quality(RID p_env) const {
+	return environment_storage.environment_get_goghot_gi_quality(p_env);
+}
+
+void RendererSceneRender::goghot_gi_set_effects(const Vector<RID> &p_effects) {
+	compositor_storage.goghot_gi_set_effects(p_effects);
+}
+
 // GLOW
 
 void RendererSceneRender::environment_set_glow(RID p_env, bool p_enable, Vector<float> p_levels, float p_intensity, float p_strength, float p_mix, float p_bloom_threshold, RSE::EnvironmentGlowBlendMode p_blend_mode, float p_hdr_bleed_threshold, float p_hdr_bleed_scale, float p_hdr_luminance_cap, float p_glow_map_strength, RID p_glow_map) {

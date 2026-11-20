@@ -570,6 +570,24 @@ float RendererEnvironmentStorage::environment_get_volumetric_fog_gi_volume_half_
 	return env->volumetric_fog_gi_volume_half_extent;
 }
 
+void RendererEnvironmentStorage::environment_set_goghot_gi(RID p_env, bool p_enable, int p_quality) {
+	Environment *env = environment_owner.get_or_null(p_env);
+	ERR_FAIL_NULL(env);
+	env->goghot_gi_enabled = p_enable;
+	env->goghot_gi_quality = p_quality;
+}
+
+bool RendererEnvironmentStorage::environment_get_goghot_gi_enabled(RID p_env) const {
+	Environment *env = environment_owner.get_or_null(p_env);
+	return env != nullptr && env->goghot_gi_enabled;
+}
+
+int RendererEnvironmentStorage::environment_get_goghot_gi_quality(RID p_env) const {
+	Environment *env = environment_owner.get_or_null(p_env);
+	ERR_FAIL_NULL_V(env, 1);
+	return env->goghot_gi_quality;
+}
+
 // GLOW
 
 void RendererEnvironmentStorage::environment_set_glow(RID p_env, bool p_enable, Vector<float> p_levels, float p_intensity, float p_strength, float p_mix, float p_bloom_threshold, RSE::EnvironmentGlowBlendMode p_blend_mode, float p_hdr_bleed_threshold, float p_hdr_bleed_scale, float p_hdr_luminance_cap, float p_glow_map_strength, RID p_glow_map) {

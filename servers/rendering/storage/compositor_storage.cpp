@@ -192,3 +192,19 @@ Vector<RID> RendererCompositorStorage::compositor_get_compositor_effects(RID p_c
 		return compositor->compositor_effects;
 	}
 }
+
+Vector<RID> RendererCompositorStorage::get_view_effects(RID p_compositor, bool p_goghot_gi, RSE::CompositorEffectCallbackType p_callback_type, bool p_enabled_only) const {
+	Vector<RID> effects;
+	if (p_compositor.is_valid() && is_compositor(p_compositor)) {
+		effects = compositor_get_compositor_effects(p_compositor, p_callback_type, p_enabled_only);
+	}
+	if (p_goghot_gi) {
+		for (const RID &rid : goghot_gi_effects) {
+			if (is_compositor_effect(rid) && (!p_enabled_only || compositor_effect_get_enabled(rid)) &&
+					(p_callback_type == RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_ANY || compositor_effect_get_callback_type(rid) == p_callback_type)) {
+				effects.push_back(rid);
+			}
+		}
+	}
+	return effects;
+}

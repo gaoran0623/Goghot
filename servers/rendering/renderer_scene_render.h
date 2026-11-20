@@ -181,6 +181,10 @@ public:
 	float environment_get_volumetric_fog_temporal_reprojection_amount(RID p_env) const;
 	float environment_get_volumetric_fog_ambient_inject(RID p_env) const;
 	void environment_set_volumetric_fog_gi_volume(RID p_env, RID p_rd_texture, float p_half_extent);
+	void environment_set_goghot_gi(RID p_env, bool p_enable, int p_quality);
+	bool environment_get_goghot_gi_enabled(RID p_env) const;
+	int environment_get_goghot_gi_quality(RID p_env) const;
+	void goghot_gi_set_effects(const Vector<RID> &p_effects);
 	RID environment_get_volumetric_fog_gi_volume(RID p_env) const;
 	float environment_get_volumetric_fog_gi_volume_half_extent(RID p_env) const;
 

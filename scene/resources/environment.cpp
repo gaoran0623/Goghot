@@ -603,6 +603,30 @@ void Environment::_update_sdfgi() {
 			sdfgi_probe_bias);
 }
 
+// Goghot GI
+
+void Environment::set_goghot_gi_enabled(bool p_enabled) {
+	goghot_gi_enabled = p_enabled;
+	_update_goghot_gi();
+}
+
+bool Environment::is_goghot_gi_enabled() const {
+	return goghot_gi_enabled;
+}
+
+void Environment::set_goghot_gi_quality(int p_quality) {
+	goghot_gi_quality = CLAMP(p_quality, 0, 2);
+	_update_goghot_gi();
+}
+
+int Environment::get_goghot_gi_quality() const {
+	return goghot_gi_quality;
+}
+
+void Environment::_update_goghot_gi() {
+	RS::get_singleton()->environment_set_goghot_gi(environment, goghot_gi_enabled, goghot_gi_quality);
+}
+
 // Glow
 
 void Environment::set_glow_enabled(bool p_enabled) {
@@ -1430,6 +1454,17 @@ void Environment::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "sdfgi_normal_bias"), "set_sdfgi_normal_bias", "get_sdfgi_normal_bias");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "sdfgi_probe_bias"), "set_sdfgi_probe_bias", "get_sdfgi_probe_bias");
 
+	// Goghot GI
+
+	ClassDB::bind_method(D_METHOD("set_goghot_gi_enabled", "enabled"), &Environment::set_goghot_gi_enabled);
+	ClassDB::bind_method(D_METHOD("is_goghot_gi_enabled"), &Environment::is_goghot_gi_enabled);
+	ClassDB::bind_method(D_METHOD("set_goghot_gi_quality", "quality"), &Environment::set_goghot_gi_quality);
+	ClassDB::bind_method(D_METHOD("get_goghot_gi_quality"), &Environment::get_goghot_gi_quality);
+
+	ADD_GROUP("Goghot GI", "goghot_gi_");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "goghot_gi_enabled", PROPERTY_HINT_GROUP_ENABLE), "set_goghot_gi_enabled", "is_goghot_gi_enabled");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "goghot_gi_quality", PROPERTY_HINT_ENUM, "Low,Medium,High"), "set_goghot_gi_quality", "get_goghot_gi_quality");
+
 	// Glow
 
 	ClassDB::bind_method(D_METHOD("set_glow_enabled", "enabled"), &Environment::set_glow_enabled);
@@ -1654,6 +1689,7 @@ Environment::Environment() {
 	_update_ssao();
 	_update_ssil();
 	_update_sdfgi();
+	_update_goghot_gi();
 	_update_glow();
 	_update_fog();
 	_update_adjustment();

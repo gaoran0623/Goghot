@@ -707,6 +707,13 @@ public:
 	virtual void environment_set_volumetric_fog_filter_active(bool p_enable) = 0;
 	virtual void environment_set_volumetric_fog_gi_volume(RID p_env, RID p_rd_texture, float p_half_extent) = 0;
 
+	// Goghot GI: environments that enable it get the effects an extension registered with goghot_gi_set_effects.
+	virtual void environment_set_goghot_gi(RID p_env, bool p_enable, int p_quality) = 0;
+	virtual bool environment_get_goghot_gi_enabled(RID p_env) const = 0;
+	virtual int environment_get_goghot_gi_quality(RID p_env) const = 0;
+	virtual void goghot_gi_set_effects(const Vector<RID> &p_effects) = 0;
+	void _goghot_gi_set_effects(const TypedArray<RID> &p_effects);
+
 	virtual Ref<Image> environment_bake_panorama(RID p_env, bool p_bake_irradiance, const Size2i &p_size) = 0;
 
 	virtual void screen_space_roughness_limiter_set_active(bool p_enable, float p_amount, float p_limit) = 0;

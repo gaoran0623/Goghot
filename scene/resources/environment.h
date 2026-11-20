@@ -162,6 +162,11 @@ private:
 	float sdfgi_probe_bias = 1.1;
 	void _update_sdfgi();
 
+	// Goghot GI (provided by the Goghot GDExtension, see RenderingServer.goghot_gi_set_effects)
+	bool goghot_gi_enabled = false;
+	int goghot_gi_quality = 1;
+	void _update_goghot_gi();
+
 	// Glow
 	bool glow_enabled = false;
 	Vector<float> glow_levels;
@@ -326,6 +331,10 @@ public:
 	// SDFGI
 	void set_sdfgi_enabled(bool p_enabled);
 	bool is_sdfgi_enabled() const;
+	void set_goghot_gi_enabled(bool p_enabled);
+	bool is_goghot_gi_enabled() const;
+	void set_goghot_gi_quality(int p_quality);
+	int get_goghot_gi_quality() const;
 	void set_sdfgi_cascades(int p_cascades);
 	int get_sdfgi_cascades() const;
 	void set_sdfgi_min_cell_size(float p_size);

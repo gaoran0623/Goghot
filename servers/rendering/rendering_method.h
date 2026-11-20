@@ -242,6 +242,10 @@ public:
 	virtual void environment_set_volumetric_fog_volume_size(int p_size, int p_depth) = 0;
 	virtual void environment_set_volumetric_fog_filter_active(bool p_enable) = 0;
 	virtual void environment_set_volumetric_fog_gi_volume(RID p_env, RID p_rd_texture, float p_half_extent) = 0;
+	virtual void environment_set_goghot_gi(RID p_env, bool p_enable, int p_quality) = 0;
+	virtual bool environment_get_goghot_gi_enabled(RID p_env) const = 0;
+	virtual int environment_get_goghot_gi_quality(RID p_env) const = 0;
+	virtual void goghot_gi_set_effects(const Vector<RID> &p_effects) = 0;
 
 	// Glow
 

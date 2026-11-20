@@ -893,6 +893,10 @@ public:
 	FUNC2(environment_set_volumetric_fog_volume_size, int, int)
 	FUNC1(environment_set_volumetric_fog_filter_active, bool)
 	FUNC3(environment_set_volumetric_fog_gi_volume, RID, RID, float)
+	FUNC3(environment_set_goghot_gi, RID, bool, int)
+	FUNC1RC(bool, environment_get_goghot_gi_enabled, RID)
+	FUNC1RC(int, environment_get_goghot_gi_quality, RID)
+	FUNC1(goghot_gi_set_effects, const Vector<RID> &)
 
 	FUNC11(environment_set_sdfgi, RID, bool, int, float, RSE::EnvironmentSDFGIYScale, bool, float, bool, float, float, float)
 	FUNC1(environment_set_sdfgi_ray_count, RSE::EnvironmentSDFGIRayCount)

@@ -120,6 +120,8 @@ private:
 		float volumetric_fog_sky_affect = 1.0;
 		RID volumetric_fog_gi_volume; // External GI (RD 3D texture), replaces the flat ambient injection.
 		float volumetric_fog_gi_volume_half_extent = 0.0;
+		bool goghot_gi_enabled = false;
+		int goghot_gi_quality = 1;
 		bool volumetric_fog_temporal_reprojection = true;
 		float volumetric_fog_temporal_reprojection_amount = 0.9;
 
@@ -272,6 +274,9 @@ public:
 	void environment_set_volumetric_fog_gi_volume(RID p_env, RID p_rd_texture, float p_half_extent);
 	RID environment_get_volumetric_fog_gi_volume(RID p_env) const;
 	float environment_get_volumetric_fog_gi_volume_half_extent(RID p_env) const;
+	void environment_set_goghot_gi(RID p_env, bool p_enable, int p_quality);
+	bool environment_get_goghot_gi_enabled(RID p_env) const;
+	int environment_get_goghot_gi_quality(RID p_env) const;
 
 	// GLOW
 	void environment_set_glow(RID p_env, bool p_enable, Vector<float> p_levels, float p_intensity, float p_strength, float p_mix, float p_bloom_threshold, RSE::EnvironmentGlowBlendMode p_blend_mode, float p_hdr_bleed_threshold, float p_hdr_bleed_scale, float p_hdr_luminance_cap, float p_glow_map_strength, RID p_glow_map);

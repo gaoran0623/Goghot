@@ -1271,6 +1271,10 @@ public:
 	PASS2(environment_set_volumetric_fog_volume_size, int, int)
 	PASS1(environment_set_volumetric_fog_filter_active, bool)
 	PASS3(environment_set_volumetric_fog_gi_volume, RID, RID, float)
+	PASS3(environment_set_goghot_gi, RID, bool, int)
+	PASS1RC(bool, environment_get_goghot_gi_enabled, RID)
+	PASS1RC(int, environment_get_goghot_gi_quality, RID)
+	PASS1(goghot_gi_set_effects, const Vector<RID> &)
 
 	// Depth Fog
 	PASS4(environment_set_fog_depth, RID, float, float, float)
