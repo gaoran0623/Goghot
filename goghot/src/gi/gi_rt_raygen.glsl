@@ -58,6 +58,9 @@ float light_attenuation(Light l, vec3 L, float dist) {
 }
 
 float trace_shadow(vec3 o, vec3 d, float tmax) {
+	if (!(tmax > 0.0)) {
+		return 1.0; // light closer than the ray offset (or NaN): nothing in between; tmax must be >= 0 (VUID-RuntimeSpirv-OpTraceRayKHR-06356)
+	}
 	shadow_visible = 0.0;
 	traceRayEXT(tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT,
 			0x02, 0, 1, 1, o, 0.0, d, tmax, 1); // shadow casters only
