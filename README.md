@@ -136,6 +136,12 @@ cd goghot && scons target=template_debug
 
 擴充用的 `goghot/api/extension_api.json` 是從本分支的引擎匯出的（`godot --headless --dump-extension-api`），所以擴充要搭配本分支的引擎使用。
 
+## 捐贈
+
+謝謝你的好意，不過**不需要捐贈給 Goghot**。我有正職工作，這個專案是業餘時間做的，不缺經費；能投入的維護時間也有限，所以不承諾回應 issue 的速度和支援範圍。
+
+如果你想支持，**請捐贈給 [Godot 官方](https://fund.godotengine.org/)**。如果你也希望 Godot 有更好的即時全域光照，歡迎在社群裡（[Godot Proposals](https://github.com/godotengine/godot-proposals)、論壇、貢獻者聊天室）表達需求，說服官方把更好的 GI 納入引擎本身。這比任何分支都能幫到更多人。
+
 ## 致謝
 
 - **[Godot Engine](https://godotengine.org)**：本專案是 Godot 的分支，以 [MIT 授權](LICENSE.txt) 釋出。
