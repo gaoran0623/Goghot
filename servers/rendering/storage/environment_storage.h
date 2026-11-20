@@ -121,7 +121,7 @@ private:
 		RID volumetric_fog_gi_volume; // External GI (RD 3D texture), replaces the flat ambient injection.
 		float volumetric_fog_gi_volume_half_extent = 0.0;
 		bool goghot_gi_enabled = false;
-		int goghot_gi_quality = 1;
+		int goghot_gi_quality = 2;
 		bool volumetric_fog_temporal_reprojection = true;
 		float volumetric_fog_temporal_reprojection_amount = 0.9;
 

@@ -164,7 +164,7 @@ private:
 
 	// Goghot GI (provided by the Goghot GDExtension, see RenderingServer.goghot_gi_set_effects)
 	bool goghot_gi_enabled = false;
-	int goghot_gi_quality = 1;
+	int goghot_gi_quality = 2; // High: the GoghotGI node default (16 px probes)
 	void _update_goghot_gi();
 
 	// Glow
