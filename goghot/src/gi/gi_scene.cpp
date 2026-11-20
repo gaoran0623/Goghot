@@ -45,7 +45,7 @@ using namespace godot;
 static constexpr double Math_PI_CONST = 3.14159265358979323846;
 static constexpr uint64_t MM_REFRESH_FRAMES = 60;
 static constexpr uint64_t NODE_REFRESH_FRAMES = 30; // per node attribute refresh period (staggered)
-static constexpr uint32_t NODE_SLICE_FRAMES = 8; // static nodes re-read every 8 frames (staggered)
+static constexpr uint32_t NODE_SLICE_FRAMES = 16; // static nodes re-read every 16 frames (staggered)
 static constexpr int MM_AGGREGATE_MIN = 32; // MultiMeshes with at least this many instances are merged
 static constexpr uint64_t MM_AGGREGATE_MAX_TRIS = 8000000; // ... unless the merged mesh would exceed this
 
@@ -210,6 +210,30 @@ std::shared_ptr<const std::vector<GIMaterial>> GoghotGIScene::_materials_of(cons
 		}
 		v->push_back(_material_cached(m));
 	}
+	// Intern by content: an unchanged material set keeps the same shared vector across refreshes, so the
+	// world tracer's instance structure signature (which uses the pointer) stays stable.
+	uint64_t h = 1469598103934665603ull ^ v->size();
+	for (const GIMaterial &g : *v) {
+		const float f[] = { g.albedo.r, g.albedo.g, g.albedo.b, g.emission.r, g.emission.g, g.emission.b, g.alpha_scissor, g.opacity, g.coverage, g.emission_energy,
+			g.texture_average.r, g.texture_average.g, g.texture_average.b, g.emission_texture_average.r, g.emission_texture_average.g, g.emission_texture_average.b };
+		const uint32_t *bits = reinterpret_cast<const uint32_t *>(f);
+		for (size_t k = 0; k < sizeof(f) / 4; k++) {
+			h = (h ^ bits[k]) * 1099511628211ull;
+		}
+		h = (h ^ g.albedo_texture.get_id()) * 1099511628211ull;
+		h = (h ^ g.emission_texture.get_id()) * 1099511628211ull;
+		h = (h ^ uint64_t((g.double_sided ? 1 : 0) | (g.emission_multiply ? 2 : 0))) * 1099511628211ull;
+	}
+	auto it = material_sets.find(h);
+	if (it != material_sets.end()) {
+		if (auto shared = it->second.lock()) {
+			return shared;
+		}
+	}
+	if (material_sets.size() > 16384) {
+		material_sets.clear();
+	}
+	material_sets[h] = v;
 	return v;
 }
 
@@ -246,7 +270,7 @@ void GoghotGIScene::_add_instance(GISceneSnapshot &r_snap, std::unordered_map<ui
 	inst.materials = p_materials ? p_materials : _materials_of(p_mesh, *m, p_override, nullptr);
 	if (_culled(inst.aabb, *m, *inst.materials)) {
 		culled++;
-		return;
+		inst.culled = true;
 	}
 	inst.mesh = mesh_index;
 	inst.xform = p_xform;
@@ -328,6 +352,13 @@ bool GoghotGIScene::_refresh_due(uint64_t p_id) const {
 	return (update_frame + p_id) % NODE_REFRESH_FRAMES == 0;
 }
 
+void GoghotGIScene::_on_node_removed(Node *p_node) {
+	const uint64_t id = p_node->get_instance_id();
+	if (relevant_set.count(id)) {
+		removed_ids.insert(id);
+	}
+}
+
 void GoghotGIScene::_on_tree_changed(Node *p_node) {
 	// node_added fires for every node of an added subtree: relevant ones are appended directly; removed
 	// nodes are dropped lazily when found outside the tree (no re-walk of the whole tree).
@@ -336,6 +367,8 @@ void GoghotGIScene::_on_tree_changed(Node *p_node) {
 	}
 	const uint64_t id = p_node->get_instance_id();
 	node_records.erase(id); // a re-added node is re-read
+	node_out.erase(id);
+	removed_ids.erase(id);
 	if (relevant_set.insert(id).second) {
 		relevant_nodes.push_back(id);
 	}
@@ -348,13 +381,16 @@ void GoghotGIScene::_notification(int p_what) {
 		const Callable cb = callable_mp(this, &GoghotGIScene::_on_tree_changed);
 		if (!tree->is_connected("node_added", cb)) {
 			tree->connect("node_added", cb);
+			tree->connect("node_removed", callable_mp(this, &GoghotGIScene::_on_node_removed));
 		}
 	} else if (p_what == NOTIFICATION_EXIT_TREE) {
 		SceneTree *tree = get_tree();
 		const Callable cb = callable_mp(this, &GoghotGIScene::_on_tree_changed);
 		if (tree && tree->is_connected("node_added", cb)) {
 			tree->disconnect("node_added", cb);
+			tree->disconnect("node_removed", callable_mp(this, &GoghotGIScene::_on_node_removed));
 		}
+		removed_ids.clear();
 		relevant_nodes.clear();
 		relevant_set.clear();
 		node_records.clear();
@@ -413,9 +449,9 @@ bool GoghotGIScene::_collect_node(Node *p_node, GISceneSnapshot &r_snap, std::un
 			inst.materials = rec.materials;
 			if (!inst.deformed && _culled(inst.aabb, *rec.mesh, *inst.materials)) {
 				culled++;
-			} else {
-				r_snap.instances.push_back(std::move(inst));
+				inst.culled = true;
 			}
+			r_snap.instances.push_back(std::move(inst));
 		}
 		return true;
 	}
@@ -610,6 +646,7 @@ void GoghotGIScene::update_now() {
 	}
 	const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
 	nodes_visited = 0;
+	fast_reads = 0;
 	new_meshes = 0;
 	culled = 0;
 	update_frame++;
@@ -641,22 +678,58 @@ void GoghotGIScene::update_now() {
 		const bool check_ancestor = root != get_tree()->get_root(); // editor: only the edited scene
 		for (size_t i = 0; i < relevant_nodes.size();) {
 			const uint64_t id = relevant_nodes[i];
-			Node *n = Object::cast_to<Node>(ObjectDB::get_instance(id));
-			if (n == nullptr || !n->is_inside_tree() || (check_ancestor && n != root && !root->is_ancestor_of(n))) {
-				// Removed (or outside the collected root): drop it (re-added nodes come back via node_added).
+			auto drop = [&]() { // removed (or outside the collected root); re-added nodes come back via node_added
 				relevant_set.erase(id);
 				node_records.erase(id);
 				node_out.erase(id);
+				removed_ids.erase(id);
 				relevant_nodes[i] = relevant_nodes.back();
 				relevant_nodes.pop_back();
+			};
+			if (!removed_ids.empty() && removed_ids.count(id)) {
+				drop();
 				continue;
 			}
 			NodeOut &o = node_out[id];
-			if (!o.valid || o.always || o.hot > 0 || (update_frame + id) % NODE_SLICE_FRAMES == 0) {
+			const bool slice_due = (update_frame + id) % NODE_SLICE_FRAMES == 0;
+			const bool read = !o.valid || o.always || o.hot > 0 || slice_due;
+			Node *n = nullptr;
+			if (read) { // the node itself is touched only when read (node_removed tells about the others)
+				n = Object::cast_to<Node>(ObjectDB::get_instance(id));
+				if (n == nullptr || !n->is_inside_tree() || (check_ancestor && n != root && !root->is_ancestor_of(n))) {
+					drop();
+					continue;
+				}
+			}
+			if (o.valid && !slice_due && (o.always || o.hot > 0) && o.lights.empty() && o.instances.size() == 1) {
+				// Fast path (moving / deformed single-mesh node between full reads): only the transform.
+				if (Node3D *n3 = Object::cast_to<Node3D>(n)) {
+					const Transform3D x = n3->get_global_transform();
+					auto rit = node_records.find(id);
+					if (rit != node_records.end()) {
+						GIInstance &inst = o.instances[0].second;
+						inst.xform = x;
+						inst.aabb = x.xform(rit->second.local_aabb);
+						if (inst.deformed) {
+							inst.aabb = inst.aabb.grow(0.25f + 0.5f * inst.aabb.get_longest_axis_size());
+						}
+						if (x != o.xform) {
+							o.hot = NODE_SLICE_FRAMES * 2;
+						} else if (o.hot > 0) {
+							o.hot--;
+						}
+						o.xform = x;
+						fast_reads++;
+					}
+				}
+			} else if (read) {
 				nodes_visited++;
-				GISceneSnapshot tmp;
-				std::unordered_map<uint64_t, uint32_t> tmp_index;
-				_collect_node(n, tmp, tmp_index);
+				GISceneSnapshot &tmp = scratch_snap; // reused: no allocation per node read
+				tmp.meshes.clear();
+				tmp.instances.clear();
+				tmp.lights.clear();
+				scratch_index.clear();
+				_collect_node(n, tmp, scratch_index);
 				o.instances.clear();
 				o.meshes = tmp.meshes;
 				o.always = !tmp.lights.empty();
@@ -664,7 +737,7 @@ void GoghotGIScene::update_now() {
 					o.instances.emplace_back(tmp.meshes[inst.mesh], inst);
 					o.always = o.always || inst.deformed;
 				}
-				o.lights = std::move(tmp.lights);
+				o.lights = tmp.lights;
 				const Transform3D x = o.instances.empty() ? Transform3D() : o.instances[0].second.xform;
 				if (o.valid && x != o.xform) {
 					o.hot = NODE_SLICE_FRAMES * 2; // moving: read every frame for a while
@@ -749,6 +822,7 @@ Dictionary GoghotGIScene::get_collect_stats() const {
 	d["mesh_cache"] = int64_t(mesh_cache.size());
 	d["culled"] = int64_t(culled);
 	d["nodes_ms"] = nodes_ms;
+	d["fast_reads"] = int64_t(fast_reads);
 	return d;
 }
 

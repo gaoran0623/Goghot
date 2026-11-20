@@ -65,6 +65,7 @@ struct GIInstance {
 	godot::AABB aabb; // world bounds (deformed: rest pose bounds, grown)
 	uint64_t key = 0; // stable identity across frames (node, and cell / instance index)
 	bool cast_shadow = true; // GeometryInstance3D.cast_shadow != OFF: blocks shadow rays
+	bool culled = false; // small and far (trace_min_size): kept in the list (stable structure), never hit (TLAS mask 0)
 };
 
 struct GILight {
@@ -110,6 +111,7 @@ protected:
 	double collect_ms = 0.0;
 	double nodes_ms = 0.0; // part of collect_ms: reading nodes + assembling (before sort / hash / handoff)
 	uint64_t nodes_visited = 0;
+	uint64_t fast_reads = 0; // transform-only node reads (moving / deformed nodes between full reads)
 	uint64_t new_meshes = 0; // meshes read from the Mesh resource this frame (mesh cache misses)
 	bool physical_units = false;
 	float exposure_scale = 1.0f;
@@ -166,6 +168,8 @@ protected:
 	uint64_t relevant_root = 0;
 	bool tree_dirty = true;
 	void _on_tree_changed(godot::Node *p_node); // node_added: appended to relevant_nodes (no re-walk)
+	void _on_node_removed(godot::Node *p_node); // node_removed: dropped on the next update
+	std::unordered_set<uint64_t> removed_ids;
 	static bool _is_relevant(godot::Node *p_node);
 	// Per node attributes that rarely change (mesh, materials, skinning, bounds, GI mode, shadow casting,
 	// GridMap / CSG mesh lists): re-read every NODE_REFRESH_FRAMES frames, staggered by node id; every
@@ -196,6 +200,9 @@ protected:
 		bool valid = false;
 	};
 	std::unordered_map<uint64_t, NodeOut> node_out;
+	GISceneSnapshot scratch_snap; // per node read scratch (reused)
+	std::unordered_map<uint64_t, uint32_t> scratch_index;
+	std::unordered_map<uint64_t, std::weak_ptr<const std::vector<GIMaterial>>> material_sets; // interned by content hash
 	bool _refresh_due(uint64_t p_id) const;
 	void _notification(int p_what);
 	std::shared_ptr<const GIMeshCPU> _get_mesh(const godot::Ref<godot::Resource> &p_mesh);

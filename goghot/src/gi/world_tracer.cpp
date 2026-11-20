@@ -1,4 +1,5 @@
 #include "world_tracer.h"
+#include <cstdlib>
 
 #include <godot_cpp/classes/time.hpp>
 
@@ -526,6 +527,35 @@ bool GIWorldTracer::update_scene(const GISceneSnapshot &p_snap, bool p_deformed,
 	return ok;
 }
 
+void GIWorldTracer::_update_lights(const GISceneSnapshot &p_snap) {
+	struct LightRow {
+		float vec_type[4];
+		float color_range[4];
+		float params[4];
+		float spot[4];
+		float area_a[4];
+		float area_b[4];
+	};
+	std::vector<LightRow> lrows;
+	for (const GILight &l : p_snap.lights) {
+		lrows.push_back({ { l.vec.x, l.vec.y, l.vec.z, float(l.type) }, { l.color.r, l.color.g, l.color.b, l.range },
+				{ l.attenuation, l.shadow ? 1.0f : 0.0f, l.spot_exp, 0.0f }, { l.spot_dir.x, l.spot_dir.y, l.spot_dir.z, l.spot_cos },
+				{ l.area_a.x, l.area_a.y, l.area_a.z, 0.0f }, { l.area_b.x, l.area_b.y, l.area_b.z, 0.0f } });
+	}
+	lights_used = uint32_t(lrows.size());
+	if (MAX(lights_used, 1u) > light_capacity) {
+		if (light_buffer.is_valid()) {
+			rd->free_rid(light_buffer);
+		}
+		light_capacity = MAX(lights_used * 2, 16u);
+		light_buffer = rd->storage_buffer_create(light_capacity * sizeof(LightRow));
+	}
+	if (!lrows.empty()) {
+		PackedByteArray lb = bytes_of(lrows);
+		rd->buffer_update(light_buffer, 0, lb.size(), lb);
+	}
+}
+
 bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed, Tier p_tier) {
 	if (!ready) {
 		return false;
@@ -583,7 +613,6 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 		float emission_energy, opacity;
 	};
 	std::vector<GeoRow> rows;
-	texture_table.clear();
 	std::unordered_map<uint64_t, uint32_t> tex_index;
 	TypedArray<RDAccelerationStructureInstance> insts;
 	std::vector<uint32_t> vertex_bases, index_bases;
@@ -596,6 +625,50 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 			i += uint32_t(m->indices.size());
 		}
 	}
+	// Fast path (tier A): when the instance structure (mesh, materials, deformed region, shadow casting,
+	// in order) is the same as last frame, the geometry / material rows and texture table are unchanged:
+	// only the TLAS instances' transforms and (deformed) BLASes are refreshed.
+	uint64_t sig = 1469598103934665603ull ^ p_snap.mesh_set_hash;
+	for (const GIInstance &gi : p_snap.instances) {
+		sig = (sig ^ (uint64_t(gi.mesh) * 0x9E3779B97F4A7C15ull ^ uint64_t(uintptr_t(gi.materials.get())) ^ (gi.cast_shadow ? 1u : 0u) ^ (gi.deformed ? 2u : 0u))) * 1099511628211ull;
+	}
+	if (rt && sig == rows_signature && cached_instance_count == p_snap.instances.size() && inst_pool.size() >= p_snap.instances.size()) {
+		for (size_t k = 0; k < p_snap.instances.size(); k++) {
+			const GIInstance &gi = p_snap.instances[k];
+			const Ref<RDAccelerationStructureInstance> &ri = inst_pool[k];
+			RID blas = meshes[gi.mesh].blas;
+			if (gi.deformed && p_deformed) {
+				auto it = deformed_by_instance.find(gi.rs_instance.get_id());
+				if (it != deformed_by_instance.end() && deformed[it->second].blas.is_valid()) {
+					blas = deformed[it->second].blas;
+				}
+			}
+			ri->set_blas(blas);
+			ri->set_transform(gi.xform);
+			ri->set_mask(gi.culled ? 0x00 : (gi.cast_shadow ? 0x03 : 0x01));
+			insts.push_back(ri);
+		}
+		instances_used = uint32_t(insts.size());
+		if (instances_used == 0) {
+			return false;
+		}
+		const uint64_t fph1 = Time::get_singleton()->get_ticks_usec();
+		if (instances_used > tlas_capacity) {
+			if (tlas.is_valid()) {
+				rd->free_rid(tlas);
+			}
+			tlas_capacity = MAX(instances_used * 2, 64u);
+			tlas = rd->tlas_create(tlas_capacity, RD::ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT);
+		}
+		rd->tlas_build(tlas, insts);
+		stats.rows_ms = double(fph1 - ph0) / 1000.0;
+		stats.tlas_ms = double(Time::get_singleton()->get_ticks_usec() - fph1) / 1000.0;
+		_update_lights(p_snap);
+		return true;
+	}
+	rows_signature = sig;
+	cached_instance_count = p_snap.instances.size();
+	texture_table.clear(); // full rebuild (the fast path above keeps last frame's table)
 	for (const GIInstance &gi : p_snap.instances) {
 		const GIMeshCPU &m = *p_snap.meshes[gi.mesh];
 		// Instance objects are pooled across frames (tens of thousands of allocations per frame otherwise).
@@ -665,7 +738,7 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 			rows.push_back({ index_bases[gi.mesh] + m.surfaces[s].index_base, vertex_base + m.surfaces[s].vertex_base, ti, scissor_bits,
 					{ mat.albedo.r, mat.albedo.g, mat.albedo.b, mat.double_sided ? 1.0f : 0.0f }, { mat.emission.r, mat.emission.g, mat.emission.b, 1.0f },
 					ei, mat.emission_multiply ? 1u : 0u, mat.emission_energy, mat.opacity });
-			if (!rt) {
+			if (!rt && !gi.culled) {
 				VoxDraw vd;
 				vd.xform = gi.xform;
 				vd.positions = def ? def->sources[s] : position_storage;
@@ -694,7 +767,7 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 			}
 		}
 		// Alpha tested instances run the any-hit shader; everything else stays on the opaque fast path.
-		ri->set_mask(gi.cast_shadow ? 0x03 : 0x01); // bit 1: shadow caster (shadow rays use mask 0x02)
+		ri->set_mask(gi.culled ? 0x00 : (gi.cast_shadow ? 0x03 : 0x01)); // bit 1: shadow caster (shadow rays use mask 0x02); culled: never hit
 		ri->set_flags(RD::ACCELERATION_STRUCTURE_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT |
 				(alpha_tested ? RD::ACCELERATION_STRUCTURE_INSTANCE_FORCE_NO_OPAQUE_BIT : RD::ACCELERATION_STRUCTURE_INSTANCE_FORCE_OPAQUE_BIT));
 		insts.push_back(ri);
@@ -728,32 +801,7 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 	}
 	rd->buffer_update(geo_buffer, 0, geo_bytes.size(), geo_bytes);
 
-	struct LightRow {
-		float vec_type[4];
-		float color_range[4];
-		float params[4];
-		float spot[4];
-		float area_a[4];
-		float area_b[4];
-	};
-	std::vector<LightRow> lrows;
-	for (const GILight &l : p_snap.lights) {
-		lrows.push_back({ { l.vec.x, l.vec.y, l.vec.z, float(l.type) }, { l.color.r, l.color.g, l.color.b, l.range },
-				{ l.attenuation, l.shadow ? 1.0f : 0.0f, l.spot_exp, 0.0f }, { l.spot_dir.x, l.spot_dir.y, l.spot_dir.z, l.spot_cos },
-				{ l.area_a.x, l.area_a.y, l.area_a.z, 0.0f }, { l.area_b.x, l.area_b.y, l.area_b.z, 0.0f } });
-	}
-	lights_used = uint32_t(lrows.size());
-	if (MAX(lights_used, 1u) > light_capacity) {
-		if (light_buffer.is_valid()) {
-			rd->free_rid(light_buffer);
-		}
-		light_capacity = MAX(lights_used * 2, 16u);
-		light_buffer = rd->storage_buffer_create(light_capacity * sizeof(LightRow));
-	}
-	if (!lrows.empty()) {
-		PackedByteArray lb = bytes_of(lrows);
-		rd->buffer_update(light_buffer, 0, lb.size(), lb);
-	}
+	_update_lights(p_snap);
 	stats.upload_ms = double(Time::get_singleton()->get_ticks_usec() - ph2) / 1000.0;
 	return true;
 }

@@ -1,5 +1,7 @@
 #include "gi_node.h"
 
+#include <cstring>
+
 #include "../exposure/histogram_exposure.h"
 #include "screen_probe_gi.h"
 
@@ -256,12 +258,26 @@ Color GoghotGI::_sky_radiance(const Ref<Environment> &p_env, PackedColorArray &r
 					const Color ghor = psm->get_ground_horizon_color().srgb_to_linear() * psm->get_ground_energy_multiplier();
 					const float inv_sky = 0.6f / MAX(psm->get_sky_curve(), 1e-4f), inv_ground = 0.6f / MAX(psm->get_ground_curve(), 1e-4f);
 					const float k = scale * psm->get_energy_multiplier();
+					// Re-projected only when a parameter changed (the projection is ~2k samples).
+					const float key_f[] = { top.r, top.g, top.b, hor.r, hor.g, hor.b, gbot.r, gbot.g, gbot.b, ghor.r, ghor.g, ghor.b, inv_sky, inv_ground, k };
+					uint64_t key = 1469598103934665603ull;
+					for (float f : key_f) {
+						uint32_t b;
+						memcpy(&b, &f, 4);
+						key = (key ^ b) * 1099511628211ull;
+					}
+					if (key == proc_sh_key && proc_sh.size() == 9) {
+						r_sh = proc_sh;
+						return Color(r_sh[0].r, r_sh[0].g, r_sh[0].b) * 0.282095f;
+					}
+					proc_sh_key = key;
 					r_sh = sh_project(64, 32, [&](const Vector3 &d, int, int) {
 						const float v = CLAMP(d.y, -1.0f, 1.0f);
 						const Color sk = top.lerp(hor, CLAMP(Math::pow(1.0f - v, inv_sky), 0.0f, 1.0f));
 						const Color gr = gbot.lerp(ghor, CLAMP(Math::pow(1.0f + v, inv_ground), 0.0f, 1.0f));
 						return (d.y >= 0.0f ? sk : gr) * k;
 					});
+					proc_sh = r_sh;
 					return Color(r_sh[0].r, r_sh[0].g, r_sh[0].b) * 0.282095f;
 				}
 				Ref<PanoramaSkyMaterial> pano = sky->get_material();
@@ -354,8 +370,8 @@ void GoghotGI::_process_gi(double p_delta) {
 			stats_next_usec = now + 2000000;
 			const Dictionary w = gi->get_stats();
 			const Dictionary c = get_collect_stats();
-			UtilityFunctions::print(vformat("GoghotGI: node %.2f ms (nodes %.2f), render callback %.2f ms (rows %.2f, tlas %.2f, upload %.2f) | tier %s | collect %.2f ms (%d nodes, %d new meshes, cache %d, %d culled) | tracer update %.2f ms, %d rebuilds (last %.1f ms: +%d -%d meshes, %d new BLAS%s) | %d instances, %d meshes, %d surfaces, %d tris | %d deformed (%d tris), %d tris rebuilt this frame",
-					process_ms, c["nodes_ms"], w["render_cpu_ms"], w["rows_ms"], w["tlas_ms"], w["upload_ms"], w["tier"], c["collect_ms"], c["nodes_visited"], c["new_meshes"], c["mesh_cache"], c["culled"], w["update_ms"], w["rebuilds"], w["rebuild_ms"], w["last_rebuild_added"], w["last_rebuild_removed"], w["last_rebuild_new_blas"], bool(w["last_rebuild_deformed_changed"]) ? ", deformed set changed" : "",
+			UtilityFunctions::print(vformat("GoghotGI: node %.2f ms (nodes %.2f), render callback %.2f ms (rows %.2f, tlas %.2f, upload %.2f) | tier %s | collect %.2f ms (%d nodes + %d fast, %d new meshes, cache %d, %d culled) | tracer update %.2f ms, %d rebuilds (last %.1f ms: +%d -%d meshes, %d new BLAS%s) | %d instances, %d meshes, %d surfaces, %d tris | %d deformed (%d tris), %d tris rebuilt this frame",
+					process_ms, c["nodes_ms"], w["render_cpu_ms"], w["rows_ms"], w["tlas_ms"], w["upload_ms"], w["tier"], c["collect_ms"], c["nodes_visited"], c["fast_reads"], c["new_meshes"], c["mesh_cache"], c["culled"], w["update_ms"], w["rebuilds"], w["rebuild_ms"], w["last_rebuild_added"], w["last_rebuild_removed"], w["last_rebuild_new_blas"], bool(w["last_rebuild_deformed_changed"]) ? ", deformed set changed" : "",
 					w["instances"], w["meshes"], w["surfaces"], w["triangles"], w["deformed"], w["deformed_triangles"], w["deformed_triangles_built"]));
 		}
 	}

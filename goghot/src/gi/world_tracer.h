@@ -135,6 +135,9 @@ private:
 	uint32_t deformed_cursor = 0; // round robin start of the BLAS rebuild budget
 	std::vector<godot::Ref<godot::RDAccelerationStructureInstance>> inst_pool;
 	std::unordered_map<uint64_t, godot::RID> rd_texture_cache; // texture RID -> RD texture (sRGB view)
+	uint64_t rows_signature = 0; // instance structure of the last full rows build (fast path when equal)
+	size_t cached_instance_count = 0;
+	void _update_lights(const GISceneSnapshot &p_snap);
 	uint32_t deformed_triangle_budget = 250000; // deformed BLAS triangles rebuilt per frame (round robin)
 	bool deformed_blas_cache = true; // false: one BLAS per deformed instance, recreated on buffer swaps and rebuilt every frame (pre-cache behavior)
 public:

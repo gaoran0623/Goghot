@@ -79,6 +79,8 @@ private:
 	// Panorama SH (unscaled) cached per panorama texture: the image readback and resize are slow.
 	mutable uint64_t pano_sh_id = 0;
 	mutable godot::PackedColorArray pano_sh;
+	mutable uint64_t proc_sh_key = 0; // procedural sky SH cache
+	mutable godot::PackedColorArray proc_sh;
 	godot::Color _sky_radiance(const godot::Ref<godot::Environment> &p_env, godot::PackedColorArray &r_sh) const;
 
 protected:
