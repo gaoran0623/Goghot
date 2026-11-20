@@ -19,7 +19,7 @@
 - RenderingDevice 已有光追 API，直接用，不要自己加：
   `blas_create / blas_build / tlas_create / tlas_build / raytracing_pipeline_create / hit_sbt_create / raytracing_list_*`
   （见 `servers/rendering/rendering_device.h`，已绑定到脚本/GDExtension）。
-- **引擎补丁清单**（总量目标 < 500 行，每项独立 commit，便于 rebase 上游）：
+- **引擎补丁清单**（每项独立 commit，便于 rebase 上游；总量不设上限，2026-11-20 用户取消原 500 行目标）：
   1. scene shader 可读取外部间接光/环境光贴图，替换 ambient 项（StandardMaterial3D 直接可用）
   2. 暴露 mesh 与蒙皮结果的 GPU 顶点缓冲 RID（用于 BLAS）
   3. 体积雾可采样外部 GI 缓存
