@@ -3234,6 +3234,7 @@ void RenderingServer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("scenario_set_fallback_environment", "scenario", "environment"), &RenderingServer::scenario_set_fallback_environment);
 	ClassDB::bind_method(D_METHOD("scenario_set_camera_attributes", "scenario", "effects"), &RenderingServer::scenario_set_camera_attributes);
 	ClassDB::bind_method(D_METHOD("scenario_set_compositor", "scenario", "compositor"), &RenderingServer::scenario_set_compositor);
+	ClassDB::bind_method(D_METHOD("scenario_goghot_feed_poll", "scenario"), &RenderingServer::scenario_goghot_feed_poll);
 
 	/* INSTANCE */
 

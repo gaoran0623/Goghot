@@ -947,6 +947,7 @@ public:
 	FUNC2(scenario_set_camera_attributes, RID, RID)
 	FUNC2(scenario_set_fallback_environment, RID, RID)
 	FUNC2(scenario_set_compositor, RID, RID)
+	FUNC1R(Vector<uint8_t>, scenario_goghot_feed_poll, RID)
 
 	/* INSTANCING API */
 	FUNCRIDSPLIT(instance)

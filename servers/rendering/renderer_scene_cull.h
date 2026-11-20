@@ -354,6 +354,12 @@ public:
 
 		SelfList<Instance>::List instances;
 
+		// Goghot GI instance feed (scenario_goghot_feed_poll): instances changed since the last poll, and
+		// instances that left the scenario. Off until the first poll.
+		bool goghot_feed = false;
+		SelfList<Instance>::List goghot_feed_dirty;
+		LocalVector<uint64_t> goghot_feed_freed;
+
 		LocalVector<RID> dynamic_lights;
 
 		PagedArray<InstanceBounds> instance_aabbs;
@@ -386,6 +392,12 @@ public:
 	virtual void scenario_set_reflection_atlas_size(RID p_scenario, int p_reflection_size, int p_reflection_count);
 	virtual bool is_scenario(RID p_scenario) const;
 	virtual RID scenario_get_environment(RID p_scenario);
+	virtual Vector<uint8_t> scenario_goghot_feed_poll(RID p_scenario);
+	_FORCE_INLINE_ void _goghot_feed_mark(Instance *p_instance) const {
+		if (p_instance->scenario && p_instance->scenario->goghot_feed && !p_instance->goghot_feed_item.in_list()) {
+			p_instance->scenario->goghot_feed_dirty.add(&p_instance->goghot_feed_item);
+		}
+	}
 	virtual void scenario_add_viewport_visibility_mask(RID p_scenario, RID p_viewport);
 	virtual void scenario_remove_viewport_visibility_mask(RID p_scenario, RID p_viewport);
 
@@ -473,6 +485,8 @@ public:
 		bool update_dependencies;
 
 		SelfList<Instance> update_item;
+		SelfList<Instance> goghot_feed_item;
+		bool goghot_feed_known = false; // reported to the feed (so its removal is reported too)
 
 		AABB *custom_aabb = nullptr; // <Zylann> would using aabb directly with a bool be better?
 		float extra_margin;
@@ -568,7 +582,8 @@ public:
 
 		Instance() :
 				scenario_item(this),
-				update_item(this) {
+				update_item(this),
+				goghot_feed_item(this) {
 			base_type = RSE::INSTANCE_NONE;
 			cast_shadows = RSE::SHADOW_CASTING_SETTING_ON;
 			receive_shadows = true;

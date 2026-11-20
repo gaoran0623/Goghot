@@ -9406,6 +9406,7 @@ void RenderingDevice::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("tlas_create", "max_instance_count", "flags"), &RenderingDevice::tlas_create);
 	ClassDB::bind_method(D_METHOD("blas_build", "blas"), &RenderingDevice::blas_build);
 	ClassDB::bind_method(D_METHOD("tlas_build", "tlas", "instances"), &RenderingDevice::_tlas_build);
+	ClassDB::bind_method(D_METHOD("tlas_build_packed", "tlas", "instances"), &RenderingDevice::_tlas_build_packed);
 
 	ClassDB::bind_method(D_METHOD("hit_sbt_create", "raytracing_pipeline", "initial_hit_group_capacity"), &RenderingDevice::hit_sbt_create);
 	ClassDB::bind_method(D_METHOD("hit_sbt_set_pipeline", "hit_sbt", "raytracing_pipeline"), &RenderingDevice::hit_sbt_set_pipeline);
@@ -10386,6 +10387,37 @@ Error RenderingDevice::_tlas_build(RID p_tlas, const TypedArray<RDAccelerationSt
 		instances[i] = instance->base;
 	}
 
+	return tlas_build(p_tlas, instances);
+}
+
+Error RenderingDevice::_tlas_build_packed(RID p_tlas, const Vector<uint8_t> &p_instances) {
+	// 80 bytes per instance: float[12] transform (basis rows, origin), u32 id, u32 mask, u64 hit SBT range,
+	// u32 flags, u32 padding, u64 BLAS RID. No per instance objects (Goghot GI, thousands of instances).
+	constexpr uint32_t STRIDE = 80;
+	ERR_FAIL_COND_V(p_instances.size() % STRIDE != 0, ERR_INVALID_PARAMETER);
+	const uint32_t count = p_instances.size() / STRIDE;
+	thread_local LocalVector<AccelerationStructureInstance> instances;
+	instances.resize(count);
+	const uint8_t *r = p_instances.ptr();
+	for (uint32_t i = 0; i < count; i++) {
+		const uint8_t *p = r + uint64_t(i) * STRIDE;
+		float f[12];
+		memcpy(f, p, 48);
+		uint32_t id, mask, flags;
+		uint64_t sbt, blas;
+		memcpy(&id, p + 48, 4);
+		memcpy(&mask, p + 52, 4);
+		memcpy(&sbt, p + 56, 8);
+		memcpy(&flags, p + 64, 4);
+		memcpy(&blas, p + 72, 8);
+		AccelerationStructureInstance &inst = instances[i];
+		inst.transform = Transform3D(f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11]);
+		inst.id = id;
+		inst.mask = uint8_t(mask);
+		inst.hit_sbt_range = sbt;
+		inst.flags = flags;
+		inst.blas = RID::from_uint64(blas);
+	}
 	return tlas_build(p_tlas, instances);
 }
 

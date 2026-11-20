@@ -741,6 +741,8 @@ public:
 	virtual void scenario_set_fallback_environment(RID p_scenario, RID p_environment) = 0;
 	virtual void scenario_set_camera_attributes(RID p_scenario, RID p_camera_attributes) = 0;
 	virtual void scenario_set_compositor(RID p_scenario, RID p_compositor) = 0;
+	// Goghot GI: packed records of the instances changed since the last call (see RendererSceneCull).
+	virtual Vector<uint8_t> scenario_goghot_feed_poll(RID p_scenario) = 0;
 
 	/* INSTANCING API */
 

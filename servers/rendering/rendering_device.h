@@ -2033,6 +2033,7 @@ private:
 
 	RID _blas_create(const TypedArray<RDAccelerationStructureGeometry> &p_geometries, BitField<AccelerationStructureFlagBits> p_flags);
 	Error _tlas_build(RID p_tlas, const TypedArray<RDAccelerationStructureInstance> &p_instances);
+	Error _tlas_build_packed(RID p_tlas, const Vector<uint8_t> &p_instances);
 
 	Error _hit_sbt_range_update(RID p_hit_sbt, HitShaderBindingTableRange p_range, uint32_t p_offset, const Vector<int32_t> &p_hit_group_indices);
 

@@ -520,6 +520,63 @@ bool RendererSceneCull::is_scenario(RID p_scenario) const {
 	return scenario_owner.owns(p_scenario);
 }
 
+Vector<uint8_t> RendererSceneCull::scenario_goghot_feed_poll(RID p_scenario) {
+	// Layout (little endian): u32 freed count, u32 record count, freed instance ids (u64), then per record:
+	// u64 instance, u64 object id, u64 base, u32 base type, u32 flags (1 visible, 2 casts shadows, 4 shadows
+	// only, 8 uses GI (baked or dynamic), 16 skeleton), u32 layer mask, u32 surface override count,
+	// float[12] transform (basis rows, origin), u64 material override, u64 material overlay, u64 per override.
+	Scenario *scenario = scenario_owner.get_or_null(p_scenario);
+	ERR_FAIL_NULL_V(scenario, Vector<uint8_t>());
+	if (!scenario->goghot_feed) {
+		scenario->goghot_feed = true; // first poll: everything that is in the scenario
+		for (SelfList<Instance> *E = scenario->instances.first(); E; E = E->next()) {
+			_goghot_feed_mark(E->self());
+		}
+	}
+	uint32_t records = 0;
+	uint64_t size = 8 + uint64_t(scenario->goghot_feed_freed.size()) * 8;
+	for (SelfList<Instance> *E = scenario->goghot_feed_dirty.first(); E; E = E->next()) {
+		records++;
+		size += 104 + uint64_t(E->self()->materials.size()) * 8;
+	}
+	Vector<uint8_t> out;
+	out.resize(size);
+	uint8_t *w = out.ptrw();
+	auto put32 = [&](uint32_t v) { memcpy(w, &v, 4); w += 4; };
+	auto put64 = [&](uint64_t v) { memcpy(w, &v, 8); w += 8; };
+	put32(scenario->goghot_feed_freed.size());
+	put32(records);
+	for (uint64_t id : scenario->goghot_feed_freed) {
+		put64(id);
+	}
+	scenario->goghot_feed_freed.clear();
+	while (SelfList<Instance> *E = scenario->goghot_feed_dirty.first()) {
+		Instance *inst = E->self();
+		scenario->goghot_feed_dirty.remove(E);
+		inst->goghot_feed_known = true;
+		put64(inst->self.get_id());
+		put64(uint64_t(inst->object_id));
+		put64(inst->base.get_id());
+		put32(uint32_t(inst->base_type));
+		put32((inst->visible ? 1u : 0u) | (inst->cast_shadows != RSE::SHADOW_CASTING_SETTING_OFF ? 2u : 0u) |
+				(inst->cast_shadows == RSE::SHADOW_CASTING_SETTING_SHADOWS_ONLY ? 4u : 0u) | (inst->baked_light || inst->dynamic_gi ? 8u : 0u) |
+				(inst->skeleton.is_valid() ? 16u : 0u));
+		put32(inst->layer_mask);
+		put32(inst->materials.size());
+		const Transform3D &t = inst->transform;
+		const float xf[12] = { (float)t.basis.rows[0].x, (float)t.basis.rows[0].y, (float)t.basis.rows[0].z, (float)t.basis.rows[1].x, (float)t.basis.rows[1].y, (float)t.basis.rows[1].z,
+			(float)t.basis.rows[2].x, (float)t.basis.rows[2].y, (float)t.basis.rows[2].z, (float)t.origin.x, (float)t.origin.y, (float)t.origin.z };
+		memcpy(w, xf, 48);
+		w += 48;
+		put64(inst->material_override.get_id());
+		put64(inst->material_overlay.get_id());
+		for (const RID &m : inst->materials) {
+			put64(m.get_id());
+		}
+	}
+	return out;
+}
+
 RID RendererSceneCull::scenario_get_environment(RID p_scenario) {
 	Scenario *scenario = scenario_owner.get_or_null(p_scenario);
 	ERR_FAIL_NULL_V(scenario, RID());
@@ -615,6 +672,7 @@ void RendererSceneCull::_instance_update_mesh_instance(Instance *p_instance) con
 void RendererSceneCull::instance_set_base(RID p_instance, RID p_base) {
 	Instance *instance = instance_owner.get_or_null(p_instance);
 	ERR_FAIL_NULL(instance);
+	_goghot_feed_mark(instance);
 
 	Scenario *scenario = instance->scenario;
 
@@ -860,6 +918,13 @@ void RendererSceneCull::instance_set_scenario(RID p_instance, RID p_scenario) {
 	ERR_FAIL_NULL(instance);
 
 	if (instance->scenario) {
+		if (instance->goghot_feed_item.in_list()) {
+			instance->scenario->goghot_feed_dirty.remove(&instance->goghot_feed_item);
+		}
+		if (instance->goghot_feed_known && instance->scenario->goghot_feed) {
+			instance->scenario->goghot_feed_freed.push_back(p_instance.get_id());
+		}
+		instance->goghot_feed_known = false;
 		instance->scenario->instances.remove(&instance->scenario_item);
 
 		if (instance->indexer_id.is_valid()) {
@@ -928,6 +993,7 @@ void RendererSceneCull::instance_set_scenario(RID p_instance, RID p_scenario) {
 		instance->scenario = scenario;
 
 		scenario->instances.add(&instance->scenario_item);
+		_goghot_feed_mark(instance);
 
 		switch (instance->base_type) {
 			case RSE::INSTANCE_LIGHT: {
@@ -957,6 +1023,7 @@ void RendererSceneCull::instance_set_scenario(RID p_instance, RID p_scenario) {
 void RendererSceneCull::instance_set_layer_mask(RID p_instance, uint32_t p_mask) {
 	Instance *instance = instance_owner.get_or_null(p_instance);
 	ERR_FAIL_NULL(instance);
+	_goghot_feed_mark(instance);
 
 	if (instance->layer_mask == p_mask) {
 		return;
@@ -1021,6 +1088,7 @@ void RendererSceneCull::instance_geometry_set_transparency(RID p_instance, float
 void RendererSceneCull::instance_set_transform(RID p_instance, const Transform3D &p_transform) {
 	Instance *instance = instance_owner.get_or_null(p_instance);
 	ERR_FAIL_NULL(instance);
+	_goghot_feed_mark(instance);
 
 	if (instance->transform == p_transform) {
 		return; // Must be checked to avoid worst evil.
@@ -1041,6 +1109,7 @@ void RendererSceneCull::instance_set_transform(RID p_instance, const Transform3D
 void RendererSceneCull::instance_attach_object_instance_id(RID p_instance, ObjectID p_id) {
 	Instance *instance = instance_owner.get_or_null(p_instance);
 	ERR_FAIL_NULL(instance);
+	_goghot_feed_mark(instance);
 
 	instance->object_id = p_id;
 }
@@ -1063,6 +1132,7 @@ void RendererSceneCull::instance_set_blend_shape_weight(RID p_instance, int p_sh
 void RendererSceneCull::instance_set_surface_override_material(RID p_instance, int p_surface, RID p_material) {
 	Instance *instance = instance_owner.get_or_null(p_instance);
 	ERR_FAIL_NULL(instance);
+	_goghot_feed_mark(instance);
 
 	if (instance->base_type == RSE::INSTANCE_MESH) {
 		//may not have been updated yet, may also have not been set yet. When updated will be correcte, worst case
@@ -1079,6 +1149,7 @@ void RendererSceneCull::instance_set_surface_override_material(RID p_instance, i
 void RendererSceneCull::instance_set_visible(RID p_instance, bool p_visible) {
 	Instance *instance = instance_owner.get_or_null(p_instance);
 	ERR_FAIL_NULL(instance);
+	_goghot_feed_mark(instance);
 
 	if (instance->visible == p_visible) {
 		return;
@@ -1155,6 +1226,7 @@ void RendererSceneCull::instance_set_custom_aabb(RID p_instance, AABB p_aabb) {
 void RendererSceneCull::instance_attach_skeleton(RID p_instance, RID p_skeleton) {
 	Instance *instance = instance_owner.get_or_null(p_instance);
 	ERR_FAIL_NULL(instance);
+	_goghot_feed_mark(instance);
 
 	if (instance->skeleton == p_skeleton) {
 		return;
@@ -1276,6 +1348,7 @@ Vector<ObjectID> RendererSceneCull::instances_cull_convex(const Vector<Plane> &p
 void RendererSceneCull::instance_geometry_set_flag(RID p_instance, RSE::InstanceFlags p_flags, bool p_enabled) {
 	Instance *instance = instance_owner.get_or_null(p_instance);
 	ERR_FAIL_NULL(instance);
+	_goghot_feed_mark(instance);
 
 	//ERR_FAIL_COND(((1 << instance->base_type) & RSE::INSTANCE_GEOMETRY_MASK));
 
@@ -1353,6 +1426,7 @@ void RendererSceneCull::instance_geometry_set_flag(RID p_instance, RSE::Instance
 void RendererSceneCull::instance_geometry_set_cast_shadows_setting(RID p_instance, RSE::ShadowCastingSetting p_shadow_casting_setting) {
 	Instance *instance = instance_owner.get_or_null(p_instance);
 	ERR_FAIL_NULL(instance);
+	_goghot_feed_mark(instance);
 
 	instance->cast_shadows = p_shadow_casting_setting;
 
@@ -1385,6 +1459,7 @@ void RendererSceneCull::instance_geometry_set_cast_shadows_setting(RID p_instanc
 void RendererSceneCull::instance_geometry_set_material_override(RID p_instance, RID p_material) {
 	Instance *instance = instance_owner.get_or_null(p_instance);
 	ERR_FAIL_NULL(instance);
+	_goghot_feed_mark(instance);
 
 	instance->material_override = p_material;
 	_instance_queue_update(instance, false, true);
@@ -1399,6 +1474,7 @@ void RendererSceneCull::instance_geometry_set_material_override(RID p_instance, 
 void RendererSceneCull::instance_geometry_set_material_overlay(RID p_instance, RID p_material) {
 	Instance *instance = instance_owner.get_or_null(p_instance);
 	ERR_FAIL_NULL(instance);
+	_goghot_feed_mark(instance);
 
 	instance->material_overlay = p_material;
 	_instance_queue_update(instance, false, true);

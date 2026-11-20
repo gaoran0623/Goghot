@@ -80,6 +80,7 @@ public:
 	virtual void scenario_set_reflection_atlas_size(RID p_scenario, int p_reflection_size, int p_reflection_count) = 0;
 	virtual bool is_scenario(RID p_scenario) const = 0;
 	virtual RID scenario_get_environment(RID p_scenario) = 0;
+	virtual Vector<uint8_t> scenario_goghot_feed_poll(RID p_scenario) = 0;
 	virtual void scenario_add_viewport_visibility_mask(RID p_scenario, RID p_viewport) = 0;
 	virtual void scenario_remove_viewport_visibility_mask(RID p_scenario, RID p_viewport) = 0;
 
