@@ -308,6 +308,12 @@ Color GoghotGI::_sky_radiance(const Ref<Environment> &p_env, PackedColorArray &r
 }
 
 void GoghotGI::_process(double p_delta) {
+	const uint64_t proc_t0 = Time::get_singleton()->get_ticks_usec();
+	_process_gi(p_delta);
+	process_ms = double(Time::get_singleton()->get_ticks_usec() - proc_t0) / 1000.0;
+}
+
+void GoghotGI::_process_gi(double p_delta) {
 	const bool editor = Engine::get_singleton()->is_editor_hint();
 	if (editor && !editor_preview) {
 		if (attached.is_valid()) {
@@ -348,8 +354,8 @@ void GoghotGI::_process(double p_delta) {
 			stats_next_usec = now + 2000000;
 			const Dictionary w = gi->get_stats();
 			const Dictionary c = get_collect_stats();
-			UtilityFunctions::print(vformat("GoghotGI: tier %s | collect %.2f ms (%d nodes, %d new meshes, cache %d, %d culled) | tracer update %.2f ms, %d rebuilds (last %.1f ms: +%d -%d meshes, %d new BLAS%s) | %d instances, %d meshes, %d surfaces, %d tris | %d deformed (%d tris), %d tris rebuilt this frame",
-					w["tier"], c["collect_ms"], c["nodes_visited"], c["new_meshes"], c["mesh_cache"], c["culled"], w["update_ms"], w["rebuilds"], w["rebuild_ms"], w["last_rebuild_added"], w["last_rebuild_removed"], w["last_rebuild_new_blas"], bool(w["last_rebuild_deformed_changed"]) ? ", deformed set changed" : "",
+			UtilityFunctions::print(vformat("GoghotGI: node %.2f ms, render callback %.2f ms | tier %s | collect %.2f ms (%d nodes, %d new meshes, cache %d, %d culled) | tracer update %.2f ms, %d rebuilds (last %.1f ms: +%d -%d meshes, %d new BLAS%s) | %d instances, %d meshes, %d surfaces, %d tris | %d deformed (%d tris), %d tris rebuilt this frame",
+					process_ms, w["render_cpu_ms"], w["tier"], c["collect_ms"], c["nodes_visited"], c["new_meshes"], c["mesh_cache"], c["culled"], w["update_ms"], w["rebuilds"], w["rebuild_ms"], w["last_rebuild_added"], w["last_rebuild_removed"], w["last_rebuild_new_blas"], bool(w["last_rebuild_deformed_changed"]) ? ", deformed set changed" : "",
 					w["instances"], w["meshes"], w["surfaces"], w["triangles"], w["deformed"], w["deformed_triangles"], w["deformed_triangles_built"]));
 		}
 	}

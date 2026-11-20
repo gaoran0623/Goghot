@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace goghot {
@@ -160,9 +161,41 @@ protected:
 	// Geometry / light nodes of the last full walk; the tree is walked again only when 3D nodes are
 	// added or removed (SceneTree node_added / node_removed).
 	std::vector<uint64_t> relevant_nodes;
+	std::unordered_set<uint64_t> relevant_set;
 	uint64_t relevant_root = 0;
 	bool tree_dirty = true;
-	void _on_tree_changed(godot::Node *p_node);
+	void _on_tree_changed(godot::Node *p_node); // node_added: appended to relevant_nodes (no re-walk)
+	static bool _is_relevant(godot::Node *p_node);
+	// Per node attributes that rarely change (mesh, materials, skinning, bounds, GI mode, shadow casting,
+	// GridMap / CSG mesh lists): re-read every NODE_REFRESH_FRAMES frames, staggered by node id; every
+	// frame only visibility and the global transform are read (each engine call costs, x thousands).
+	struct NodeRecord {
+		bool valid = false;
+		bool off = true; // no mesh / GI mode disabled
+		std::shared_ptr<const GIMeshCPU> mesh;
+		std::shared_ptr<const std::vector<GIMaterial>> materials;
+		godot::Ref<godot::Mesh> mesh_res;
+		bool deformed = false;
+		godot::RID rs_instance;
+		bool cast_shadow = true;
+		godot::AABB local_aabb;
+		godot::Array meshes; // GridMap / CSG: [local transform, mesh] pairs
+		godot::Ref<godot::Material> override_mat;
+	};
+	std::unordered_map<uint64_t, NodeRecord> node_records;
+	// Time slicing: what each node emitted when last read. Static nodes are re-read every
+	// NODE_SLICE_FRAMES frames (staggered); nodes that moved, deformed ones and lights every frame.
+	struct NodeOut {
+		std::vector<std::pair<std::shared_ptr<const GIMeshCPU>, GIInstance>> instances;
+		std::vector<std::shared_ptr<const GIMeshCPU>> meshes; // all meshes it registered (also of culled instances: culling must not change the mesh set)
+		std::vector<GILight> lights;
+		godot::Transform3D xform; // first instance's, for motion detection
+		uint32_t hot = 0; // frames left of per-frame reading after a motion
+		bool always = false;
+		bool valid = false;
+	};
+	std::unordered_map<uint64_t, NodeOut> node_out;
+	bool _refresh_due(uint64_t p_id) const;
 	void _notification(int p_what);
 	std::shared_ptr<const GIMeshCPU> _get_mesh(const godot::Ref<godot::Resource> &p_mesh);
 

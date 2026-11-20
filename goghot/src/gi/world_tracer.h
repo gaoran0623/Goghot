@@ -111,6 +111,7 @@ private:
 		godot::RID blas;
 		int64_t sbt_range = -1;
 		uint32_t surface_count = 0;
+		uint64_t last_used = 0; // stats.frames when last in a build
 	};
 	std::unordered_map<uint64_t, CachedMesh> mesh_gpu_cache;
 	void _free_cached_mesh(CachedMesh &p_mesh);

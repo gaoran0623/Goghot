@@ -34,6 +34,8 @@ using namespace godot;
 
 namespace goghot {
 
+static constexpr uint64_t BLAS_EVICT_FRAMES = 600;
+
 using RD = RenderingDevice;
 
 namespace {
@@ -370,8 +372,15 @@ void GIWorldTracer::_rebuild_geometry(const GISceneSnapshot &p_snap) {
 		for (const auto &m : p_snap.meshes) {
 			present.insert(m->id);
 		}
+		// Unused BLASes are kept for a while (streaming / culling bring meshes back): freed after
+		// BLAS_EVICT_FRAMES frames without being in a build, which also avoids create / free churn.
 		for (auto it = mesh_gpu_cache.begin(); it != mesh_gpu_cache.end();) {
-			if (!present.count(it->first)) {
+			if (present.count(it->first)) {
+				it->second.last_used = stats.frames;
+				++it;
+				continue;
+			}
+			if (stats.frames - it->second.last_used > BLAS_EVICT_FRAMES) {
 				_free_cached_mesh(it->second);
 				it = mesh_gpu_cache.erase(it);
 			} else {

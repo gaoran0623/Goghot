@@ -44,6 +44,8 @@ using namespace godot;
 
 static constexpr double Math_PI_CONST = 3.14159265358979323846;
 static constexpr uint64_t MM_REFRESH_FRAMES = 60;
+static constexpr uint64_t NODE_REFRESH_FRAMES = 30; // per node attribute refresh period (staggered)
+static constexpr uint32_t NODE_SLICE_FRAMES = 4; // static nodes re-read every 4 frames (staggered)
 static constexpr int MM_AGGREGATE_MIN = 32; // MultiMeshes with at least this many instances are merged
 static constexpr uint64_t MM_AGGREGATE_MAX_TRIS = 8000000; // ... unless the merged mesh would exceed this
 
@@ -309,16 +311,33 @@ static Color light_color(const Light3D *p_light, GILight::Type p_type, bool p_ph
 void GoghotGIScene::_collect(Node *p_node, GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index) {
 	nodes_visited++;
 	if (_collect_node(p_node, r_snap, r_mesh_index)) {
-		relevant_nodes.push_back(p_node->get_instance_id());
+		if (relevant_set.insert(p_node->get_instance_id()).second) {
+			relevant_nodes.push_back(p_node->get_instance_id());
+		}
 	}
 	for (int i = 0; i < p_node->get_child_count(); i++) {
 		_collect(p_node->get_child(i), r_snap, r_mesh_index);
 	}
 }
 
+bool GoghotGIScene::_is_relevant(Node *p_node) {
+	return Object::cast_to<GeometryInstance3D>(p_node) != nullptr || Object::cast_to<GridMap>(p_node) != nullptr || Object::cast_to<Light3D>(p_node) != nullptr;
+}
+
+bool GoghotGIScene::_refresh_due(uint64_t p_id) const {
+	return (update_frame + p_id) % NODE_REFRESH_FRAMES == 0;
+}
+
 void GoghotGIScene::_on_tree_changed(Node *p_node) {
-	if (Object::cast_to<Node3D>(p_node) != nullptr) {
-		tree_dirty = true; // a 3D node came or went: walk the tree again on the next update
+	// node_added fires for every node of an added subtree: relevant ones are appended directly; removed
+	// nodes are dropped lazily when found outside the tree (no re-walk of the whole tree).
+	if (!_is_relevant(p_node)) {
+		return;
+	}
+	const uint64_t id = p_node->get_instance_id();
+	node_records.erase(id); // a re-added node is re-read
+	if (relevant_set.insert(id).second) {
+		relevant_nodes.push_back(id);
 	}
 }
 
@@ -329,63 +348,79 @@ void GoghotGIScene::_notification(int p_what) {
 		const Callable cb = callable_mp(this, &GoghotGIScene::_on_tree_changed);
 		if (!tree->is_connected("node_added", cb)) {
 			tree->connect("node_added", cb);
-			tree->connect("node_removed", cb);
 		}
 	} else if (p_what == NOTIFICATION_EXIT_TREE) {
 		SceneTree *tree = get_tree();
 		const Callable cb = callable_mp(this, &GoghotGIScene::_on_tree_changed);
 		if (tree && tree->is_connected("node_added", cb)) {
 			tree->disconnect("node_added", cb);
-			tree->disconnect("node_removed", cb);
 		}
 		relevant_nodes.clear();
+		relevant_set.clear();
+		node_records.clear();
 	}
 }
 
 // Collects one node (no recursion). Returns whether the node is of a kind that contributes (geometry or
 // light), whatever its current visibility: such nodes are re-read every update from relevant_nodes.
 bool GoghotGIScene::_collect_node(Node *p_node, GISceneSnapshot &r_snap, std::unordered_map<uint64_t, uint32_t> &r_mesh_index) {
-	const bool relevant = Object::cast_to<GeometryInstance3D>(p_node) != nullptr || Object::cast_to<GridMap>(p_node) != nullptr || Object::cast_to<Light3D>(p_node) != nullptr;
-	if (!relevant) {
+	if (!_is_relevant(p_node)) {
 		return false;
 	}
+	const uint64_t nid = p_node->get_instance_id();
 	GeometryInstance3D *geo = Object::cast_to<GeometryInstance3D>(p_node);
-	const bool geo_on = geo != nullptr && geo->is_visible_in_tree() && geo->get_gi_mode() != GeometryInstance3D::GI_MODE_DISABLED;
 	if (MeshInstance3D *mi = Object::cast_to<MeshInstance3D>(p_node)) {
-		Ref<Mesh> mesh = mi->get_mesh();
-		if (geo_on && mesh.is_valid()) {
-			std::shared_ptr<const GIMeshCPU> m = _get_mesh(mesh);
-			if (m && !m->surfaces.empty()) {
-				auto it = r_mesh_index.find(m->id);
-				uint32_t mesh_index;
-				if (it == r_mesh_index.end()) {
-					mesh_index = uint32_t(r_snap.meshes.size());
-					r_mesh_index[m->id] = mesh_index;
-					r_snap.meshes.push_back(m);
-				} else {
-					mesh_index = it->second;
-				}
-				GIInstance inst;
-				inst.mesh = mesh_index;
-				inst.xform = mi->get_global_transform();
+		NodeRecord &rec = node_records[nid];
+		if (!rec.valid || _refresh_due(nid)) {
+			rec = NodeRecord();
+			rec.valid = true;
+			Ref<Mesh> mesh = mi->get_mesh();
+			std::shared_ptr<const GIMeshCPU> m = mesh.is_valid() ? _get_mesh(mesh) : nullptr;
+			rec.off = !m || m->surfaces.empty() || mi->get_gi_mode() == GeometryInstance3D::GI_MODE_DISABLED;
+			if (!rec.off) {
+				rec.mesh = m;
+				rec.mesh_res = mesh;
 				Ref<ArrayMesh> am = mesh;
-				inst.deformed = (mi->get_skin().is_valid() && !mi->get_skeleton_path().is_empty()) || (am.is_valid() && am->get_blend_shape_count() > 0);
-				inst.rs_instance = mi->get_instance();
-				inst.key = instance_key(mi, 0);
-				inst.cast_shadow = mi->get_cast_shadows_setting() != GeometryInstance3D::SHADOW_CASTING_SETTING_OFF;
-				inst.aabb = inst.xform.xform(mi->get_aabb());
-				if (inst.deformed) {
-					// Animated poses can leave the rest pose bounds: grow them (tier B dirty regions).
-					inst.aabb = inst.aabb.grow(0.25f + 0.5f * inst.aabb.get_longest_axis_size());
-				}
-				inst.materials = _materials_of(mesh, *m, Ref<Material>(), mi);
-				if (!inst.deformed && _culled(inst.aabb, *m, *inst.materials)) {
-					culled++;
-				} else {
-					r_snap.instances.push_back(std::move(inst));
-				}
+				rec.deformed = (mi->get_skin().is_valid() && !mi->get_skeleton_path().is_empty()) || (am.is_valid() && am->get_blend_shape_count() > 0);
+				rec.rs_instance = mi->get_instance();
+				rec.cast_shadow = mi->get_cast_shadows_setting() != GeometryInstance3D::SHADOW_CASTING_SETTING_OFF;
+				rec.local_aabb = mi->get_aabb();
+				rec.materials = _materials_of(mesh, *m, Ref<Material>(), mi);
 			}
 		}
+		if (!rec.off && mi->is_visible_in_tree()) {
+			auto it = r_mesh_index.find(rec.mesh->id);
+			uint32_t mesh_index;
+			if (it == r_mesh_index.end()) {
+				mesh_index = uint32_t(r_snap.meshes.size());
+				r_mesh_index[rec.mesh->id] = mesh_index;
+				r_snap.meshes.push_back(rec.mesh);
+			} else {
+				mesh_index = it->second;
+			}
+			GIInstance inst;
+			inst.mesh = mesh_index;
+			inst.xform = mi->get_global_transform();
+			inst.deformed = rec.deformed;
+			inst.rs_instance = rec.rs_instance;
+			inst.key = instance_key(mi, 0);
+			inst.cast_shadow = rec.cast_shadow;
+			inst.aabb = inst.xform.xform(rec.local_aabb);
+			if (inst.deformed) {
+				// Animated poses can leave the rest pose bounds: grow them (tier B dirty regions).
+				inst.aabb = inst.aabb.grow(0.25f + 0.5f * inst.aabb.get_longest_axis_size());
+			}
+			inst.materials = rec.materials;
+			if (!inst.deformed && _culled(inst.aabb, *rec.mesh, *inst.materials)) {
+				culled++;
+			} else {
+				r_snap.instances.push_back(std::move(inst));
+			}
+		}
+		return true;
+	}
+	const bool geo_on = geo != nullptr && geo->is_visible_in_tree() && geo->get_gi_mode() != GeometryInstance3D::GI_MODE_DISABLED;
+	if (false) {
 	} else if (MultiMeshInstance3D *mmi = Object::cast_to<MultiMeshInstance3D>(p_node)) {
 		Ref<MultiMesh> mm = mmi->get_multimesh();
 		if (geo_on && mm.is_valid() && mm->get_mesh().is_valid() && mm->get_transform_format() == MultiMesh::TRANSFORM_3D) {
@@ -481,15 +516,30 @@ bool GoghotGIScene::_collect_node(Node *p_node, GISceneSnapshot &r_snap, std::un
 			}
 		}
 	} else if (CSGShape3D *csg = Object::cast_to<CSGShape3D>(p_node)) {
-		if (geo_on && csg->is_root_shape()) {
-			const Array arr = csg->get_meshes(); // [local transform, baked mesh]
-			if (arr.size() >= 2) {
-				_add_instance(r_snap, r_mesh_index, arr[1], csg->get_global_transform() * Transform3D(arr[0]), csg->get_material_override(), instance_key(csg, 0), csg->get_cast_shadows_setting() != GeometryInstance3D::SHADOW_CASTING_SETTING_OFF);
+		NodeRecord &rec = node_records[nid];
+		if (!rec.valid || _refresh_due(nid)) {
+			rec = NodeRecord();
+			rec.valid = true;
+			rec.off = !csg->is_root_shape();
+			if (!rec.off) {
+				rec.meshes = csg->get_meshes(); // [local transform, baked mesh]
+				rec.override_mat = csg->get_material_override();
+				rec.cast_shadow = csg->get_cast_shadows_setting() != GeometryInstance3D::SHADOW_CASTING_SETTING_OFF;
 			}
 		}
+		if (geo_on && !rec.off && rec.meshes.size() >= 2) {
+			_add_instance(r_snap, r_mesh_index, rec.meshes[1], csg->get_global_transform() * Transform3D(rec.meshes[0]), rec.override_mat, instance_key(csg, 0), rec.cast_shadow);
+		}
 	} else if (GridMap *gm = Object::cast_to<GridMap>(p_node)) {
+		NodeRecord &rec = node_records[nid];
+		if (!rec.valid || _refresh_due(nid)) {
+			rec = NodeRecord();
+			rec.valid = true;
+			rec.off = false;
+			rec.meshes = gm->get_meshes(); // [local transform, mesh] per non-empty cell
+		}
 		if (gm->is_visible_in_tree()) {
-			const Array arr = gm->get_meshes(); // [local transform, mesh] per non-empty cell
+			const Array &arr = rec.meshes;
 			const Transform3D base = gm->get_global_transform();
 			for (int i = 0; i + 1 < arr.size(); i += 2) {
 				_add_instance(r_snap, r_mesh_index, arr[i + 1], base * Transform3D(arr[i]), Ref<Material>(), instance_key(gm, uint64_t(i / 2)));
@@ -582,18 +632,60 @@ void GoghotGIScene::update_now() {
 	// geometry / light nodes found by the last walk are read (12k-node scenes: the walk itself cost ms).
 	if (tree_dirty || relevant_root != root->get_instance_id()) {
 		relevant_nodes.clear();
+		relevant_set.clear();
+		node_out.clear();
 		relevant_root = root->get_instance_id();
 		tree_dirty = false;
 		_collect(root, *snap, mesh_index);
 	} else {
-		for (const uint64_t id : relevant_nodes) {
+		const bool check_ancestor = root != get_tree()->get_root(); // editor: only the edited scene
+		for (size_t i = 0; i < relevant_nodes.size();) {
+			const uint64_t id = relevant_nodes[i];
 			Node *n = Object::cast_to<Node>(ObjectDB::get_instance(id));
-			if (n == nullptr || !n->is_inside_tree()) {
-				tree_dirty = true; // freed without node_removed reaching us: walk again next update
+			if (n == nullptr || !n->is_inside_tree() || (check_ancestor && n != root && !root->is_ancestor_of(n))) {
+				// Removed (or outside the collected root): drop it (re-added nodes come back via node_added).
+				relevant_set.erase(id);
+				node_records.erase(id);
+				node_out.erase(id);
+				relevant_nodes[i] = relevant_nodes.back();
+				relevant_nodes.pop_back();
 				continue;
 			}
-			nodes_visited++;
-			_collect_node(n, *snap, mesh_index);
+			NodeOut &o = node_out[id];
+			if (!o.valid || o.always || o.hot > 0 || (update_frame + id) % NODE_SLICE_FRAMES == 0) {
+				nodes_visited++;
+				GISceneSnapshot tmp;
+				std::unordered_map<uint64_t, uint32_t> tmp_index;
+				_collect_node(n, tmp, tmp_index);
+				o.instances.clear();
+				o.meshes = tmp.meshes;
+				o.always = !tmp.lights.empty();
+				for (const GIInstance &inst : tmp.instances) {
+					o.instances.emplace_back(tmp.meshes[inst.mesh], inst);
+					o.always = o.always || inst.deformed;
+				}
+				o.lights = std::move(tmp.lights);
+				const Transform3D x = o.instances.empty() ? Transform3D() : o.instances[0].second.xform;
+				if (o.valid && x != o.xform) {
+					o.hot = NODE_SLICE_FRAMES * 2; // moving: read every frame for a while
+				} else if (o.hot > 0) {
+					o.hot--;
+				}
+				o.xform = x;
+				o.valid = true;
+			}
+			for (const auto &m : o.meshes) {
+				if (mesh_index.find(m->id) == mesh_index.end()) {
+					mesh_index[m->id] = uint32_t(snap->meshes.size());
+					snap->meshes.push_back(m);
+				}
+			}
+			for (const auto &pi : o.instances) {
+				snap->instances.push_back(pi.second);
+				snap->instances.back().mesh = mesh_index[pi.first->id];
+			}
+			snap->lights.insert(snap->lights.end(), o.lights.begin(), o.lights.end());
+			i++;
 		}
 	}
 	// Canonical mesh order (by id): the same set of meshes always gives the same order and hash, so the

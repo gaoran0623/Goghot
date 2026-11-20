@@ -88,6 +88,8 @@ protected:
 
 public:
 	void _process(double p_delta) override;
+	void _process_gi(double p_delta);
+	double process_ms = 0.0; // CPU time of the last _process (main thread)
 
 	void set_enabled(bool p_enabled);
 	bool is_enabled() const { return enabled; }

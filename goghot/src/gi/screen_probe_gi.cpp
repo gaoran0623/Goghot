@@ -1,5 +1,7 @@
 #include "screen_probe_gi.h"
 
+#include <godot_cpp/classes/time.hpp>
+
 #include <godot_cpp/classes/rd_sampler_state.hpp>
 #include <godot_cpp/classes/rd_shader_source.hpp>
 #include <godot_cpp/classes/rd_shader_spirv.hpp>
@@ -321,6 +323,12 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 	if (p_effect_callback_type != EFFECT_CALLBACK_TYPE_PRE_OPAQUE || !ready || p_render_data == nullptr) {
 		return;
 	}
+	const uint64_t cpu_t0 = Time::get_singleton()->get_ticks_usec();
+	_render_gi(p_render_data);
+	render_cpu_ms = double(Time::get_singleton()->get_ticks_usec() - cpu_t0) / 1000.0;
+}
+
+void GoghotScreenProbeGI::_render_gi(RenderData *p_render_data) {
 	RenderSceneBuffersRD *rb = Object::cast_to<RenderSceneBuffersRD>(p_render_data->get_render_scene_buffers().ptr());
 	RenderSceneData *sd = p_render_data->get_render_scene_data();
 	if (rb == nullptr || sd == nullptr) {
@@ -690,6 +698,7 @@ Dictionary GoghotScreenProbeGI::get_stats() const {
 	const GIWorldTracer::Stats &s = world.stats;
 	Dictionary d;
 	d["tier"] = active_tier;
+	d["render_cpu_ms"] = render_cpu_ms;
 	d["update_ms"] = s.update_ms;
 	d["rebuild_ms"] = s.rebuild_ms;
 	d["rebuilds"] = int64_t(s.rebuilds);
