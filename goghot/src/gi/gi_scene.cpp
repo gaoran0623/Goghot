@@ -405,6 +405,14 @@ bool GoghotGIScene::_collect_node(Node *p_node, GISceneSnapshot &r_snap, std::un
 	if (!_is_relevant(p_node)) {
 		return false;
 	}
+	if (collect_scenario.is_valid()) {
+		if (Node3D *n3 = Object::cast_to<Node3D>(p_node)) {
+			const Ref<World3D> w = n3->get_world_3d();
+			if (w.is_null() || w->get_scenario() != collect_scenario) {
+				return true; // still tracked (it may move into this world), contributes nothing
+			}
+		}
+	}
 	const uint64_t nid = p_node->get_instance_id();
 	GeometryInstance3D *geo = Object::cast_to<GeometryInstance3D>(p_node);
 	if (MeshInstance3D *mi = Object::cast_to<MeshInstance3D>(p_node)) {
@@ -747,6 +755,14 @@ void GoghotGIScene::update_now() {
 	}
 	// Full tree walk only when 3D nodes were added / removed (or the root changed); otherwise only the
 	// geometry / light nodes found by the last walk are read (12k-node scenes: the walk itself cost ms).
+	{
+		Viewport *rvp = Object::cast_to<Viewport>(root);
+		if (rvp == nullptr) {
+			rvp = root->get_viewport();
+		}
+		const Ref<World3D> w = rvp ? rvp->find_world_3d() : Ref<World3D>();
+		collect_scenario = w.is_valid() ? w->get_scenario() : RID();
+	}
 	_poll_feed(root);
 	if (tree_dirty || relevant_root != root->get_instance_id()) {
 		relevant_nodes.clear();

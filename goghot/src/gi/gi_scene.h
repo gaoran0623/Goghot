@@ -216,6 +216,9 @@ protected:
 		godot::Transform3D xform;
 	};
 	godot::RID feed_scenario;
+	// Scenario of the World3D being lit; nodes in another World3D (a SubViewport with its own world, such
+	// as an item preview) are skipped so their lights and meshes do not leak into this view's GI.
+	godot::RID collect_scenario;
 	bool feed_active = false;
 	std::unordered_map<uint64_t, FeedPrev> feed_prev; // RS instance id
 	std::unordered_set<uint64_t> feed_dirty; // node ids to re-read this update
