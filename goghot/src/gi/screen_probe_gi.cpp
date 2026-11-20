@@ -573,6 +573,7 @@ void GoghotScreenProbeGI::_render_gi(RenderData *p_render_data) {
 		_dispatch(cl, PASS_REFL_TRACE, u, (refl_size.x + 7) / 8, (refl_size.y + 7) / 8);
 	}
 	rd->compute_list_end();
+	rd->capture_timestamp("goghot_world_trace");
 	if (world_active) {
 		const uint32_t refl_ray_count = reflections ? uint32_t(refl_size.x * refl_size.y) : 0u;
 		const uint32_t launch = uint32_t(total_probes) * 32u + fog_ray_total + refl_ray_count;
@@ -583,6 +584,7 @@ void GoghotScreenProbeGI::_render_gi(RenderData *p_render_data) {
 			world.trace(frame_ubo, probes, rays, counter, fog_active ? fog_rays : rays, refl_rays, launch);
 		}
 	}
+	rd->capture_timestamp("goghot_gather");
 	const int64_t cl2 = rd->compute_list_begin();
 	{ // Gather rays -> probe radiance
 		TypedArray<RDUniform> u;
@@ -657,6 +659,7 @@ void GoghotScreenProbeGI::_render_gi(RenderData *p_render_data) {
 			fog_extent_bound = scene->fog_length;
 		}
 	}
+	rd->capture_timestamp("goghot_cache_resolve");
 	if (world_active) {
 		world.resolve_cache(frame_ubo);
 	}

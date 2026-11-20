@@ -1,5 +1,4 @@
 #include "world_tracer.h"
-#include <cstdlib>
 
 #include <godot_cpp/classes/time.hpp>
 
@@ -514,6 +513,7 @@ void GIWorldTracer::_update_deformed(const GISceneSnapshot &p_snap, bool p_rt) {
 	const size_t n = deformed.size();
 	const size_t start = n > 0 ? deformed_cursor % n : 0;
 	size_t last_built = start;
+	rd->capture_timestamp("goghot_deformed_normals");
 	const int64_t cl = rd->compute_list_begin();
 	rd->compute_list_bind_compute_pipeline(cl, skin_normals_pipeline);
 	for (size_t k = 0; k < n; k++) {
@@ -603,9 +603,11 @@ void GIWorldTracer::_update_deformed(const GISceneSnapshot &p_snap, bool p_rt) {
 		}
 	}
 	rd->compute_list_end();
+	rd->capture_timestamp("goghot_deformed_blas");
 	for (const RID &b : builds) {
 		rd->blas_build(b); // full rebuild (no refit API)
 	}
+	rd->capture_timestamp("goghot_scene_update");
 	deformed_cursor = uint32_t(last_built + 1);
 	stats.deformed_triangles_built = budget_used;
 }
