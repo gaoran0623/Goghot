@@ -32,6 +32,7 @@ public:
 		uint64_t deformed_triangles_built = 0; // deformed BLAS triangles rebuilt this frame (budget)
 		uint32_t last_rebuild_added = 0, last_rebuild_removed = 0; // meshes vs the previous build
 		bool last_rebuild_deformed_changed = false;
+		double rows_ms = 0.0, tlas_ms = 0.0, upload_ms = 0.0; // update_scene phases
 		uint32_t last_rebuild_new_blas = 0; // BLASes built by the last rebuild (others reused)
 	};
 	Stats stats;
@@ -133,6 +134,7 @@ private:
 	};
 	uint32_t deformed_cursor = 0; // round robin start of the BLAS rebuild budget
 	std::vector<godot::Ref<godot::RDAccelerationStructureInstance>> inst_pool;
+	std::unordered_map<uint64_t, godot::RID> rd_texture_cache; // texture RID -> RD texture (sRGB view)
 	uint32_t deformed_triangle_budget = 250000; // deformed BLAS triangles rebuilt per frame (round robin)
 	bool deformed_blas_cache = true; // false: one BLAS per deformed instance, recreated on buffer swaps and rebuilt every frame (pre-cache behavior)
 public:

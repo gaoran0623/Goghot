@@ -45,7 +45,7 @@ using namespace godot;
 static constexpr double Math_PI_CONST = 3.14159265358979323846;
 static constexpr uint64_t MM_REFRESH_FRAMES = 60;
 static constexpr uint64_t NODE_REFRESH_FRAMES = 30; // per node attribute refresh period (staggered)
-static constexpr uint32_t NODE_SLICE_FRAMES = 4; // static nodes re-read every 4 frames (staggered)
+static constexpr uint32_t NODE_SLICE_FRAMES = 8; // static nodes re-read every 8 frames (staggered)
 static constexpr int MM_AGGREGATE_MIN = 32; // MultiMeshes with at least this many instances are merged
 static constexpr uint64_t MM_AGGREGATE_MAX_TRIS = 8000000; // ... unless the merged mesh would exceed this
 
@@ -688,6 +688,8 @@ void GoghotGIScene::update_now() {
 			i++;
 		}
 	}
+	const uint64_t ph_nodes = Time::get_singleton()->get_ticks_usec();
+	nodes_ms = double(ph_nodes - t0) / 1000.0;
 	// Canonical mesh order (by id): the same set of meshes always gives the same order and hash, so the
 	// world tracer does not rebuild all geometry when only the scene tree order changed.
 	{
@@ -746,6 +748,7 @@ Dictionary GoghotGIScene::get_collect_stats() const {
 	d["new_meshes"] = int64_t(new_meshes);
 	d["mesh_cache"] = int64_t(mesh_cache.size());
 	d["culled"] = int64_t(culled);
+	d["nodes_ms"] = nodes_ms;
 	return d;
 }
 

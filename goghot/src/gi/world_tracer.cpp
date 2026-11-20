@@ -571,6 +571,7 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 	if (p_deformed) {
 		_update_deformed(p_snap, rt);
 	}
+	const uint64_t ph0 = Time::get_singleton()->get_ticks_usec(); // phase timing (print_stats)
 	vox_draws.clear();
 
 	// Geometry/material table: one row per instance surface; instance custom index = first row.
@@ -634,7 +635,19 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 				if (uint32_t(texture_table.size()) >= MAX_TEXTURES) {
 					return 0xFFFFFFFFu;
 				}
-				RID rdt = RenderingServer::get_singleton()->texture_get_rd_texture(p_tex, true); // sRGB view: samples linear
+				// RenderingServer call per texture per frame is costly: the RD texture of a texture RID is
+				// cached across frames (cleared when it grows large, e.g. after a lot of streaming).
+				RID rdt;
+				auto rc = rd_texture_cache.find(p_tex.get_id());
+				if (rc != rd_texture_cache.end() && rd->texture_is_valid(rc->second)) {
+					rdt = rc->second;
+				} else {
+					if (rd_texture_cache.size() > 4096) {
+						rd_texture_cache.clear();
+					}
+					rdt = RenderingServer::get_singleton()->texture_get_rd_texture(p_tex, true); // sRGB view: samples linear
+					rd_texture_cache[p_tex.get_id()] = rdt;
+				}
 				if (!rdt.is_valid()) {
 					return 0xFFFFFFFFu;
 				}
@@ -690,6 +703,7 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 	if (instances_used == 0) {
 		return false;
 	}
+	const uint64_t ph1 = Time::get_singleton()->get_ticks_usec();
 	if (rt && instances_used > tlas_capacity) {
 		if (tlas.is_valid()) {
 			rd->free_rid(tlas);
@@ -701,6 +715,9 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 		rd->tlas_build(tlas, insts);
 	}
 
+	const uint64_t ph2 = Time::get_singleton()->get_ticks_usec();
+	stats.rows_ms = double(ph1 - ph0) / 1000.0;
+	stats.tlas_ms = double(ph2 - ph1) / 1000.0;
 	PackedByteArray geo_bytes = bytes_of(rows);
 	if (uint32_t(rows.size()) > geo_capacity) {
 		if (geo_buffer.is_valid()) {
@@ -737,6 +754,7 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 		PackedByteArray lb = bytes_of(lrows);
 		rd->buffer_update(light_buffer, 0, lb.size(), lb);
 	}
+	stats.upload_ms = double(Time::get_singleton()->get_ticks_usec() - ph2) / 1000.0;
 	return true;
 }
 

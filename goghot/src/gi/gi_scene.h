@@ -108,6 +108,7 @@ protected:
 	// normalization when physical units are on), which Godot applies to lights and emission.
 	// Collection statistics of the last update (CPU, main thread).
 	double collect_ms = 0.0;
+	double nodes_ms = 0.0; // part of collect_ms: reading nodes + assembling (before sort / hash / handoff)
 	uint64_t nodes_visited = 0;
 	uint64_t new_meshes = 0; // meshes read from the Mesh resource this frame (mesh cache misses)
 	bool physical_units = false;

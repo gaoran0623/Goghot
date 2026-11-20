@@ -699,6 +699,9 @@ Dictionary GoghotScreenProbeGI::get_stats() const {
 	Dictionary d;
 	d["tier"] = active_tier;
 	d["render_cpu_ms"] = render_cpu_ms;
+	d["rows_ms"] = s.rows_ms;
+	d["tlas_ms"] = s.tlas_ms;
+	d["upload_ms"] = s.upload_ms;
 	d["update_ms"] = s.update_ms;
 	d["rebuild_ms"] = s.rebuild_ms;
 	d["rebuilds"] = int64_t(s.rebuilds);
