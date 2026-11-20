@@ -350,8 +350,10 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 	primary_area = area;
 	primary_seen_frame = now;
 	const uint64_t cpu_t0 = Time::get_singleton()->get_ticks_usec();
+	cb_begin_us = cpu_t0;
 	_render_gi(p_render_data);
-	render_cpu_ms = double(Time::get_singleton()->get_ticks_usec() - cpu_t0) / 1000.0;
+	cb_end_us = Time::get_singleton()->get_ticks_usec();
+	render_cpu_ms = double(cb_end_us - cpu_t0) / 1000.0;
 }
 
 void GoghotScreenProbeGI::_render_gi(RenderData *p_render_data) {
@@ -520,6 +522,8 @@ void GoghotScreenProbeGI::_render_gi(RenderData *p_render_data) {
 
 	// GPU timing markers (read by the test bench: RenderingDevice.get_captured_timestamp_*).
 	rd->capture_timestamp("goghot_gi_begin");
+	const uint64_t rec_t0 = Time::get_singleton()->get_ticks_usec();
+	setup_ms = double(rec_t0 - cb_begin_us) / 1000.0 - world.stats.update_ms;
 	const int64_t cl = rd->compute_list_begin();
 	{ // HZB
 		TypedArray<RDUniform> u;
@@ -652,6 +656,7 @@ void GoghotScreenProbeGI::_render_gi(RenderData *p_render_data) {
 		world.resolve_cache(frame_ubo);
 	}
 	rd->capture_timestamp("goghot_gi_end");
+	record_ms = double(Time::get_singleton()->get_ticks_usec() - rec_t0) / 1000.0;
 
 	prev_proj = proj;
 	prev_cam = cam;
@@ -725,6 +730,13 @@ Dictionary GoghotScreenProbeGI::get_stats() const {
 	Dictionary d;
 	d["tier"] = active_tier;
 	d["render_cpu_ms"] = render_cpu_ms;
+	d["setup_ms"] = setup_ms;
+	d["record_ms"] = record_ms;
+	d["cb_begin_us"] = int64_t(cb_begin_us);
+	d["cb_end_us"] = int64_t(cb_end_us);
+	d["deformed_ms"] = world.stats.deformed_ms;
+	d["arena_repacks"] = int64_t(world.get_repacks());
+	d["lights_ms"] = world.stats.lights_ms;
 	d["secondary_viewports"] = int64_t(secondary_viewports);
 	d["rows_ms"] = s.rows_ms;
 	d["tlas_ms"] = s.tlas_ms;

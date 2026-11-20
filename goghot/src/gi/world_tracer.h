@@ -24,6 +24,7 @@ public:
 	// Per frame statistics (render thread, read by GoghotScreenProbeGI::get_stats).
 	struct Stats {
 		double update_ms = 0.0; // CPU time of update_scene
+		double deformed_ms = 0.0, lights_ms = 0.0; // update_scene phases
 		double rebuild_ms = 0.0; // CPU time of the last geometry rebuild
 		uint64_t rebuilds = 0; // geometry rebuilds (BLAS / buffers) since start
 		uint64_t frames = 0;
@@ -121,7 +122,8 @@ private:
 	// Deformed instances: own BLAS over Godot's per-instance deformed vertex buffers (engine patch 2),
 	// rebuilt every frame; normals decoded into their own region of the normal buffer.
 	struct DeformedGPU {
-		uint32_t mesh = 0;
+		uint32_t mesh = 0; // index into the snapshot's meshes (updated by every rebuild)
+		uint64_t mesh_id = 0;
 		godot::RID rs_instance;
 		uint32_t region_base = 0;
 		std::vector<godot::RID> sources; // vertex buffers the active BLAS / normals were built from
@@ -172,6 +174,25 @@ private:
 	uint32_t lights_used = 0;
 
 	void _free_geometry();
+	// Global vertex / index buffers as arenas: each mesh (and each deformed instance's private normal / uv
+	// region) keeps its range across rebuilds, so a mesh streamed in only uploads its own data. Ranges of
+	// meshes no longer in the scene stay allocated for BLAS_EVICT_FRAMES (they may come back), and the
+	// arenas are repacked from scratch only when they are full or more than half holes.
+	struct Range {
+		uint32_t vbase = 0, vcount = 0, ibase = 0, icount = 0;
+		uint64_t last_used = 0;
+	};
+	std::unordered_map<uint64_t, Range> mesh_ranges; // mesh id
+	std::unordered_map<uint64_t, Range> deformed_ranges; // RS instance id (vertex region only)
+	uint32_t vtx_used = 0, idx_used = 0, vtx_cap = 0, idx_cap = 0;
+	uint64_t repacks = 0;
+	void _arena_alloc(Range &r_range, uint32_t p_vcount, uint32_t p_icount);
+	void _arena_upload(const Range &p_range, const GIMeshCPU &p_mesh, bool p_geometry);
+
+public:
+	uint64_t get_repacks() const { return repacks; }
+
+private:
 	// Tier B state.
 	struct VoxDraw {
 		godot::Transform3D xform;

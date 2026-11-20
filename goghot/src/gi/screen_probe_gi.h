@@ -200,6 +200,9 @@ public:
 	int get_active_tier() const { return active_tier; } // 1 = A, 2 = B, 3 = C
 	godot::Dictionary get_stats() const;
 	double render_cpu_ms = 0.0; // CPU time of the last render callback (render thread)
+	// Phase timings of the last callback (ms): before update_scene, update_scene, recording the passes.
+	double setup_ms = 0.0, record_ms = 0.0;
+	uint64_t cb_begin_us = 0, cb_end_us = 0; // absolute ticks of the last primary callback (frame breakdown)
 	void _render_gi(godot::RenderData *p_render_data); // world tracer statistics of the last frame (see GIWorldTracer::Stats)
 	GOGHOT_PROP(float, reflection_max_roughness)
 	GOGHOT_PROP(int, reflection_min_frames)
