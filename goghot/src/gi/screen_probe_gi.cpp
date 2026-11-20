@@ -1,5 +1,6 @@
 #include "screen_probe_gi.h"
 
+#include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/time.hpp>
 
 #include <godot_cpp/classes/rd_sampler_state.hpp>
@@ -323,6 +324,31 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 	if (p_effect_callback_type != EFFECT_CALLBACK_TYPE_PRE_OPAQUE || !ready || p_render_data == nullptr) {
 		return;
 	}
+	Ref<RenderSceneBuffersRD> rbuf = p_render_data->get_render_scene_buffers();
+	if (rbuf.is_null()) {
+		return;
+	}
+	const uint64_t id = rbuf->get_instance_id();
+	const Vector2i isize = rbuf->get_internal_size();
+	const int64_t area = int64_t(isize.x) * int64_t(isize.y);
+	const uint64_t now = Engine::get_singleton()->get_frames_drawn();
+	if (id != primary_buffers) {
+		// Switch when the current primary is gone (not rendered for a while) or a larger viewport appears.
+		if (primary_buffers == 0 || now > primary_seen_frame + 30 || area > primary_area) {
+			primary_buffers = id;
+			has_history = false;
+			prev_color_valid = false;
+		} else {
+			secondary_viewports++;
+			if (rbuf->has_texture("rbgi", "ambient")) {
+				rd->texture_clear(rbuf->get_texture("rbgi", "ambient"), Color(0, 0, 0, 0), 0, 1, 0, 1);
+				rd->texture_clear(rbuf->get_texture("rbgi", "reflection"), Color(0, 0, 0, 0), 0, 1, 0, 1);
+			}
+			return;
+		}
+	}
+	primary_area = area;
+	primary_seen_frame = now;
 	const uint64_t cpu_t0 = Time::get_singleton()->get_ticks_usec();
 	_render_gi(p_render_data);
 	render_cpu_ms = double(Time::get_singleton()->get_ticks_usec() - cpu_t0) / 1000.0;
@@ -699,6 +725,7 @@ Dictionary GoghotScreenProbeGI::get_stats() const {
 	Dictionary d;
 	d["tier"] = active_tier;
 	d["render_cpu_ms"] = render_cpu_ms;
+	d["secondary_viewports"] = int64_t(secondary_viewports);
 	d["rows_ms"] = s.rows_ms;
 	d["tlas_ms"] = s.tlas_ms;
 	d["upload_ms"] = s.upload_ms;

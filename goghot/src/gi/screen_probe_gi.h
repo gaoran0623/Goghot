@@ -123,6 +123,13 @@ class GoghotScreenProbeGI : public godot::CompositorEffect {
 	int frame = 0;
 	int ping = 0;
 	bool has_history = false;
+	// The GI state (history, probes, sized buffers) belongs to one viewport: the largest 3D viewport rendering
+	// this world. Others (light meters, minimaps, editor previews) get their GI buffers cleared, so they fall
+	// back to the built-in ambient, instead of reallocating everything every time the size alternates.
+	uint64_t primary_buffers = 0;
+	int64_t primary_area = 0;
+	uint64_t primary_seen_frame = 0;
+	uint64_t secondary_viewports = 0; // callbacks skipped as secondary (stats)
 	bool prev_color_valid = false;
 	godot::Projection prev_proj;
 	godot::Transform3D prev_cam;
