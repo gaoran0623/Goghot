@@ -4,6 +4,10 @@
 
 基於 Godot `master`（4.8-beta）。GI 主體都在 GDExtension（[`goghot/`](goghot/)）裡；引擎只改了少量、各自獨立的補丁（見[引擎補丁](#引擎補丁)）。
 
+**名字的由來：** Goghot 是 **Godot** 加上 **梵谷（Van Gogh）** 的諧音。梵谷的畫以光和色彩著稱，而這個專案要做的，正是讓光在場景裡自然地反彈、上色。
+
+**為什麼不向 Godot 官方提交 PR：** 本專案的程式碼主要是在 AI（Claude）協助下寫成的，而 Godot 官方目前不接受 AI 生成的程式碼貢獻。另外，部分引擎補丁是專門為 Goghot 設計的（例如 Environment 裡的 Goghot GI 選項），不是通用的上游功能。所以 Goghot 以獨立分支的形式維護：持續 rebase 到最新的上游，每個引擎補丁各自是獨立的 commit。
+
 ## 對比
 
 每組由左到右：不開 GI、Godot 內建 SDFGI、Goghot（A 檔，硬體光追）、Blender Cycles 參考圖（1024 spp）。右上角是和 Cycles 的 [FLIP](https://github.com/NVlabs/flip) 誤差，越低越好。960×540，同一套預設參數，沒有逐場景調參。
