@@ -34,8 +34,7 @@ into your project, then **add one `GoghotGI` node to the scene**. That is all:
 - Requirements / limits: Forward+, Vulkan, single view (no XR), no MSAA; GI affects opaque geometry,
   reflections and volumetric fog, not transparent materials themselves. `ShaderMaterial` surfaces are
   seen as grey by the world tracer (no surface cache), custom sky shaders as a uniform estimate,
-  area light textures are ignored. See `reports/PHASE*.md` for measured quality and cost and their known
-  limitations.
+  area light textures are ignored. Measured quality and cost come from the test bench (`testbench/tools/run.py`).
 
 | path | what |
 |---|---|
@@ -47,7 +46,7 @@ into your project, then **add one `GoghotGI` node to the scene**. That is all:
 | `testbench/` | Test bench Godot project. `scenes/*.json` are shared by Godot (`capture.gd`) and Cycles (`tools/blender_ref.py`) |
 | `testbench/tools/run.py` | Renders all scenes, Cycles references (cached), FLIP/SSIM/flicker/GPU ms, writes `reports/<time>_<tag>/` |
 | `testbench/timing_check.gd` | Sanity check that viewport GPU timing scales with a known ALU load (rerun after driver/engine updates) |
-| `reports/` | Test bench reports and phase summaries |
+| `reports/` | Test bench reports and phase summaries (local only, not in version control) |
 | `KNOWN_ISSUES.md` | Engine/tooling issues we deliberately do not fix |
 
 ## Build and run (Windows, from repo root)

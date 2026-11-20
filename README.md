@@ -45,7 +45,7 @@
 | foliage | 0.161 | 0.240 | **0.088** |
 | dusk_fog | 0.231 | 0.466 | **0.201** |
 
-dusk_fog 的誤差主要來自 Godot 體積霧本身和 Cycles 的亮度差異：不開 GI 時亮度比就已經是 1.21。完整的 17 個場景、B 檔（體素）以及和 SSIL、VoxelGI 的比較，見 [`goghot/reports/PHASE7.md`](goghot/reports/PHASE7.md)。
+dusk_fog 的誤差主要來自 Godot 體積霧本身和 Cycles 的亮度差異：不開 GI 時亮度比就已經是 1.21。測試台共有 17 個場景，也可以跑 B 檔（體素），或和 Godot 的 SSIL、VoxelGI 比較（`--gi` 參數）。
 
 ## 使用方式
 
@@ -92,7 +92,7 @@ dusk_fog 的誤差主要來自 Godot 體積霧本身和 Cycles 的亮度差異�
 
 - 每個場景都有固定的相機路徑，用命令列渲染出幀序列，和同一場景的 Blender Cycles 參考圖比對。
 - 指標包括：FLIP、SSIM、亮度比、靜止畫面相鄰幀的閃爍、運動時的拖影、GPU 時間。
-- 報告存在 [`goghot/reports/`](goghot/reports/)。
+- 報告寫到本機的 `goghot/reports/`（不納入版本控制）。
 
 ```
 python goghot/testbench/tools/run.py --godot <godot editor binary> --gi node --tag mytest
