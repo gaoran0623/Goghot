@@ -132,9 +132,11 @@ RTX 3060 級的顯卡、沒有光追的顯卡（B 檔）、AMD 和 Intel 都**�
 
 ```
 pip install scons
-scons platform=windows target=editor
+scons platform=windows target=editor use_mingw=yes production=yes d3d12=no accesskit=no
 cd goghot && scons target=template_debug
 ```
+
+引擎請用 **MinGW（GCC）加 `production=yes`** 編譯（例如 winget 安裝 `BrechtSanders.WinLibs.POSIX.UCRT`，必要時用 `mingw_prefix=` 指定路徑），跟官方發行版一樣。用 MSVC 編的引擎，GDScript 會慢好幾倍（MSVC 沒有 computed goto，預設也不開 LTO）。擴充用 MSVC 或 MinGW 編都可以。
 
 擴充用的 `goghot/api/extension_api.json` 是從本分支的引擎匯出的（`godot --headless --dump-extension-api`），所以擴充要搭配本分支的引擎使用。
 

@@ -132,9 +132,11 @@ On Windows:
 
 ```
 pip install scons
-scons platform=windows target=editor
+scons platform=windows target=editor use_mingw=yes production=yes d3d12=no accesskit=no
 cd goghot && scons target=template_debug
 ```
+
+Build the engine **with MinGW (GCC) and `production=yes`** (for example WinLibs, winget `BrechtSanders.WinLibs.POSIX.UCRT`; point `mingw_prefix=` at it if needed), like the official releases. An MSVC-built engine runs GDScript several times slower (MSVC has no computed goto and no LTO by default). The extension can be built with either.
 
 The extension's `goghot/api/extension_api.json` is dumped from this fork's engine (`godot --headless --dump-extension-api`), so the extension has to be used with this fork's engine.
 

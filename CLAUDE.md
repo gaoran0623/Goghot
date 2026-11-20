@@ -33,6 +33,7 @@
 
 ## 构建与调试（Windows）
 - 引擎：`scons platform=windows target=editor dev_build=yes compiledb=yes`（scons 不在 PATH 上，需先 `pip install scons`）
+- 量性能 / 给用户用的引擎：MinGW 发行版 `scons platform=windows target=editor use_mingw=yes production=yes mingw_prefix=<WinLibs mingw64> d3d12=no accesskit=no`（WinLibs GCC，winget `BrechtSanders.WinLibs.POSIX.UCRT`）。MSVC 版的 GDScript 慢约 3.6 倍(没有 computed goto、没有 LTO)，性能数字不能用 MSVC 版量。2026-11-20
 - 调试 GPU：`--rendering-driver vulkan --gpu-validation`（系统卡死时加 `--gpu-abort`）
 - 测试台出帧：`--fixed-fps 60 --write-movie <out.png>`，配合固定相机路径脚本
 - GPU 崩溃（DEVICE_LOST 等）先开 validation layer 再排查，不要盲改。
