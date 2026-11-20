@@ -155,6 +155,10 @@ protected:
 	void _notification(int p_what);
 
 public:
+	void set_environment_effect(bool p_enable) { environment_effect = p_enable; }
+	bool is_environment_effect() const { return environment_effect; }
+	// Whether this effect should render a view with environment p_env (see environment_effect).
+	bool renders_environment(const godot::RID &p_env) const;
 	void _render_callback(int32_t p_effect_callback_type, godot::RenderData *p_render_data) override;
 	godot::Ref<GoghotGIColorCapture> create_color_capture();
 	void set_scene_snapshot(std::shared_ptr<const GISceneSnapshot> p_scene); // any thread
@@ -200,6 +204,10 @@ public:
 	int get_active_tier() const { return active_tier; } // 1 = A, 2 = B, 3 = C
 	godot::Dictionary get_stats() const;
 	double render_cpu_ms = 0.0; // CPU time of the last render callback (render thread)
+	// Registered with RenderingServer.goghot_gi_set_effects (engine patch 7) by the environment Goghot GI.
+	// Effects that are not (a GoghotGI node's, in a compositor) skip views whose environment enables Goghot
+	// GI: that one renders them.
+	bool environment_effect = false;
 	// Phase timings of the last callback (ms): before update_scene, update_scene, recording the passes.
 	double setup_ms = 0.0, record_ms = 0.0;
 	uint64_t cb_begin_us = 0, cb_end_us = 0; // absolute ticks of the last primary callback (frame breakdown)

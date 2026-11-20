@@ -20,6 +20,7 @@
 #include <godot_cpp/classes/environment.hpp>
 #include <godot_cpp/classes/viewport.hpp>
 #include <godot_cpp/classes/world3d.hpp>
+#include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/directional_light3d.hpp>
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/geometry_instance3d.hpp>
@@ -46,6 +47,7 @@ static constexpr double Math_PI_CONST = 3.14159265358979323846;
 static constexpr uint64_t MM_REFRESH_FRAMES = 60;
 static constexpr uint64_t NODE_REFRESH_FRAMES = 30; // per node attribute refresh period (staggered)
 static constexpr uint32_t NODE_SLICE_FRAMES = 16; // static nodes re-read every 16 frames (staggered)
+static constexpr uint32_t FEED_SLICE_FRAMES = 240; // with the engine feed: safety re-read of unchanged nodes
 static constexpr int MM_AGGREGATE_MIN = 32; // MultiMeshes with at least this many instances are merged
 static constexpr uint64_t MM_AGGREGATE_MAX_TRIS = 8000000; // ... unless the merged mesh would exceed this
 
@@ -640,6 +642,84 @@ bool GoghotGIScene::_collect_node(Node *p_node, GISceneSnapshot &r_snap, std::un
 	return true;
 }
 
+void GoghotGIScene::_poll_feed(Node *p_root) {
+	feed_dirty.clear();
+	feed_moves.clear();
+	feed_records = 0;
+	Viewport *vp = Object::cast_to<Viewport>(p_root);
+	if (vp == nullptr) {
+		vp = p_root->get_viewport();
+	}
+	Ref<World3D> world = vp ? vp->find_world_3d() : Ref<World3D>();
+	const RID scenario = world.is_valid() ? world->get_scenario() : RID();
+	if (!scenario.is_valid()) {
+		feed_active = false;
+		return;
+	}
+	if (scenario != feed_scenario) {
+		feed_scenario = scenario;
+		feed_prev.clear(); // the first poll of a scenario reports all of its instances
+		node_out.clear();
+	}
+	const PackedByteArray fb = RenderingServer::get_singleton()->scenario_goghot_feed_poll(scenario);
+	if (fb.size() < 8) {
+		feed_active = false;
+		return;
+	}
+	feed_active = true;
+	const uint8_t *p = fb.ptr();
+	const uint8_t *end = p + fb.size();
+	auto get32 = [&]() { uint32_t v; memcpy(&v, p, 4); p += 4; return v; };
+	auto get64 = [&]() { uint64_t v; memcpy(&v, p, 8); p += 8; return v; };
+	const uint32_t freed = get32();
+	const uint32_t records = get32();
+	feed_records = records;
+	for (uint32_t i = 0; i < freed && p + 8 <= end; i++) {
+		auto it = feed_prev.find(get64());
+		if (it != feed_prev.end()) {
+			feed_dirty.insert(it->second.object);
+			feed_prev.erase(it);
+		}
+	}
+	for (uint32_t i = 0; i < records && p + 104 <= end; i++) {
+		const uint64_t inst = get64();
+		const uint64_t object = get64();
+		const uint64_t base = get64();
+		const uint32_t base_type = get32();
+		const uint32_t flags = get32();
+		const uint32_t layers = get32();
+		const uint32_t n_mat = get32();
+		float f[12];
+		memcpy(f, p, 48);
+		p += 48;
+		uint64_t attrs = (1469598103934665603ull ^ base_type ^ (uint64_t(flags) << 8) ^ (uint64_t(layers) << 16)) * 1099511628211ull;
+		for (uint32_t k = 0; k < 2 + n_mat && p + 8 <= end; k++) {
+			attrs = (attrs ^ get64()) * 1099511628211ull;
+		}
+		if (object == 0) {
+			continue; // not owned by a node (direct RenderingServer use): not collected
+		}
+		FeedPrev &prev = feed_prev[inst];
+		const bool known = prev.object == object;
+		if (!known || prev.base != base || prev.attrs != attrs) {
+			if (known || prev.object != 0) {
+				feed_dirty.insert(prev.object);
+			}
+			feed_dirty.insert(object);
+		} else {
+			FeedMove &m = feed_moves[object];
+			if (m.rs_instance != 0 && m.rs_instance != inst) {
+				feed_dirty.insert(object); // several instances of one node moved: read the node
+			}
+			m.rs_instance = inst;
+			m.xform = Transform3D(f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11]);
+		}
+		prev.object = object;
+		prev.base = base;
+		prev.attrs = attrs;
+	}
+}
+
 void GoghotGIScene::update_now() {
 	if (gi.is_null() || !is_inside_tree()) {
 		return;
@@ -667,6 +747,7 @@ void GoghotGIScene::update_now() {
 	}
 	// Full tree walk only when 3D nodes were added / removed (or the root changed); otherwise only the
 	// geometry / light nodes found by the last walk are read (12k-node scenes: the walk itself cost ms).
+	_poll_feed(root);
 	if (tree_dirty || relevant_root != root->get_instance_id()) {
 		relevant_nodes.clear();
 		relevant_set.clear();
@@ -691,8 +772,21 @@ void GoghotGIScene::update_now() {
 				continue;
 			}
 			NodeOut &o = node_out[id];
-			const bool slice_due = (update_frame + id) % NODE_SLICE_FRAMES == 0;
-			const bool read = !o.valid || o.always || o.hot > 0 || slice_due;
+			const bool slice_due = (update_frame + id) % (feed_active ? FEED_SLICE_FRAMES : NODE_SLICE_FRAMES) == 0;
+			bool read = !o.valid || o.always || o.hot > 0 || slice_due;
+			const FeedMove *move = nullptr;
+			if (feed_active && o.valid) {
+				// Only what the engine reported as changed (lights always: their parameters are not instance state).
+				read = slice_due || o.always || feed_dirty.count(id);
+				auto mv = feed_moves.find(id);
+				if (!read && mv != feed_moves.end()) {
+					if (o.instances.size() == 1 && o.lights.empty() && o.instances[0].second.rs_instance.get_id() == mv->second.rs_instance) {
+						move = &mv->second;
+					} else {
+						read = true;
+					}
+				}
+			}
 			Node *n = nullptr;
 			if (read) { // the node itself is touched only when read (node_removed tells about the others)
 				n = Object::cast_to<Node>(ObjectDB::get_instance(id));
@@ -701,7 +795,20 @@ void GoghotGIScene::update_now() {
 					continue;
 				}
 			}
-			if (o.valid && !slice_due && (o.always || o.hot > 0) && o.lights.empty() && o.instances.size() == 1) {
+			if (move != nullptr) {
+				// Engine feed: the node's instance moved; nothing else changed.
+				auto rit = node_records.find(id);
+				if (rit != node_records.end()) {
+					GIInstance &inst = o.instances[0].second;
+					inst.xform = move->xform;
+					inst.aabb = move->xform.xform(rit->second.local_aabb);
+					if (inst.deformed) {
+						inst.aabb = inst.aabb.grow(0.25f + 0.5f * inst.aabb.get_longest_axis_size());
+					}
+					o.xform = move->xform;
+					fast_reads++;
+				}
+			} else if (!feed_active && o.valid && !slice_due && (o.always || o.hot > 0) && o.lights.empty() && o.instances.size() == 1) {
 				// Fast path (moving / deformed single-mesh node between full reads): only the transform.
 				if (Node3D *n3 = Object::cast_to<Node3D>(n)) {
 					const Transform3D x = n3->get_global_transform();
@@ -738,6 +845,9 @@ void GoghotGIScene::update_now() {
 					o.always = o.always || inst.deformed;
 				}
 				o.lights = tmp.lights;
+				if (feed_active) {
+					o.always = !o.lights.empty(); // deformed geometry is on the GPU; moves come from the feed
+				}
 				const Transform3D x = o.instances.empty() ? Transform3D() : o.instances[0].second.xform;
 				if (o.valid && x != o.xform) {
 					o.hot = NODE_SLICE_FRAMES * 2; // moving: read every frame for a while
@@ -823,6 +933,8 @@ Dictionary GoghotGIScene::get_collect_stats() const {
 	d["culled"] = int64_t(culled);
 	d["nodes_ms"] = nodes_ms;
 	d["fast_reads"] = int64_t(fast_reads);
+	d["feed_active"] = feed_active;
+	d["feed_records"] = int64_t(feed_records);
 	return d;
 }
 

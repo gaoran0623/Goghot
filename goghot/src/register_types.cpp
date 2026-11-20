@@ -7,9 +7,15 @@
 #include "exposure/histogram_exposure.h"
 #include "gi/gi_node.h"
 #include "gi/gi_scene.h"
+#include "gi/gi_server.h"
 #include "gi/screen_probe_gi.h"
 
+#include <godot_cpp/classes/engine.hpp>
+#include <godot_cpp/classes/rendering_server.hpp>
+
 using namespace godot;
+
+static goghot::GoghotGIServer *gi_server = nullptr;
 
 static void initialize_goghot(ModuleInitializationLevel p_level) {
 	if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
@@ -21,9 +27,23 @@ static void initialize_goghot(ModuleInitializationLevel p_level) {
 	GDREGISTER_CLASS(goghot::GoghotGIScene);
 	GDREGISTER_CLASS(goghot::GoghotGIDebug);
 	GDREGISTER_CLASS(goghot::GoghotGI);
+	GDREGISTER_INTERNAL_CLASS(goghot::GoghotGIServer);
+	gi_server = memnew(goghot::GoghotGIServer);
+	// The RenderingServer does not exist yet at this level: connected on the first main loop iteration.
+	callable_mp(gi_server, &goghot::GoghotGIServer::connect_late).call_deferred();
 }
 
 static void uninitialize_goghot(ModuleInitializationLevel p_level) {
+	if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE || gi_server == nullptr) {
+		return;
+	}
+	RenderingServer *rs = Object::cast_to<RenderingServer>(Engine::get_singleton()->get_singleton("RenderingServer"));
+	if (rs && rs->is_connected("frame_pre_draw", callable_mp(gi_server, &goghot::GoghotGIServer::tick))) {
+		rs->disconnect("frame_pre_draw", callable_mp(gi_server, &goghot::GoghotGIServer::tick));
+	}
+	gi_server->shutdown();
+	memdelete(gi_server);
+	gi_server = nullptr;
 }
 
 extern "C" {

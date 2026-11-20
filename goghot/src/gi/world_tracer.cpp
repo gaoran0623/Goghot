@@ -71,6 +71,13 @@ const char *RT_HEADER = "#version 460\n#extension GL_EXT_ray_tracing : require\n
 
 } // namespace
 
+void GIWorldTracer::_pack_xform(const Transform3D &p_xform, float r_out[12]) {
+	const Basis &b = p_xform.basis;
+	const float v[12] = { float(b.rows[0].x), float(b.rows[0].y), float(b.rows[0].z), float(b.rows[1].x), float(b.rows[1].y), float(b.rows[1].z),
+		float(b.rows[2].x), float(b.rows[2].y), float(b.rows[2].z), float(p_xform.origin.x), float(p_xform.origin.y), float(p_xform.origin.z) };
+	memcpy(r_out, v, sizeof(v));
+}
+
 RID GIWorldTracer::_storage(const PackedByteArray &p_data) {
 	return rd->storage_buffer_create(MAX(p_data.size(), 16), p_data);
 }
@@ -720,7 +727,7 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 	};
 	std::vector<GeoRow> rows;
 	std::unordered_map<uint64_t, uint32_t> tex_index;
-	TypedArray<RDAccelerationStructureInstance> insts;
+	uint32_t inst_count = 0;
 	std::vector<uint32_t> vertex_bases, index_bases;
 	for (const MeshGPU &mg : meshes) { // arena ranges (see _rebuild_geometry), in snapshot mesh order
 		vertex_bases.push_back(mg.vertex_base);
@@ -733,8 +740,7 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 	for (const GIInstance &gi : p_snap.instances) {
 		sig = (sig ^ (uint64_t(gi.mesh) * 0x9E3779B97F4A7C15ull ^ uint64_t(uintptr_t(gi.materials.get())) ^ (gi.cast_shadow ? 1u : 0u) ^ (gi.deformed ? 2u : 0u))) * 1099511628211ull;
 	}
-	if (rt && sig == rows_signature && cached_instance_count == p_snap.instances.size() && inst_mirror.size() == p_snap.instances.size() &&
-			size_t(insts_cached.size()) == p_snap.instances.size()) {
+	if (rt && sig == rows_signature && cached_instance_count == p_snap.instances.size() && tlas_instances.size() == p_snap.instances.size()) {
 		bool changed = false;
 		for (size_t k = 0; k < p_snap.instances.size(); k++) {
 			const GIInstance &gi = p_snap.instances[k];
@@ -745,21 +751,14 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 					blas = deformed[it->second].blas;
 				}
 			}
+			TlasInstance &ti = tlas_instances[k];
+			float xf[12];
+			_pack_xform(gi.xform, xf);
 			const uint32_t mask = gi.culled ? 0x00 : (gi.cast_shadow ? 0x03 : 0x01);
-			InstMirror &mm = inst_mirror[k];
-			if (mm.blas != blas.get_id()) {
-				inst_pool[k]->set_blas(blas);
-				mm.blas = blas.get_id();
-				changed = true;
-			}
-			if (mm.xform != gi.xform) {
-				inst_pool[k]->set_transform(gi.xform);
-				mm.xform = gi.xform;
-				changed = true;
-			}
-			if (mm.mask != mask) {
-				inst_pool[k]->set_mask(mask);
-				mm.mask = mask;
+			if (ti.blas != blas.get_id() || ti.mask != mask || memcmp(ti.xform, xf, sizeof(xf)) != 0) {
+				ti.blas = blas.get_id();
+				ti.mask = mask;
+				memcpy(ti.xform, xf, sizeof(xf));
 				changed = true;
 			}
 		}
@@ -778,7 +777,8 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 		}
 		// Rebuilt deformed BLASes change the bounds the TLAS was built with: rebuild it then too.
 		if (changed || tlas_dirty || stats.deformed_triangles_built > 0) {
-			rd->tlas_build(tlas, insts_cached);
+			memcpy(tlas_bytes.ptrw(), tlas_instances.data(), tlas_instances.size() * sizeof(TlasInstance));
+			rd->tlas_build_packed(tlas, tlas_bytes);
 			tlas_dirty = false;
 		}
 		stats.rows_ms = double(fph1 - ph0) / 1000.0;
@@ -791,37 +791,28 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 	rows_signature = sig;
 	cached_instance_count = p_snap.instances.size();
 	texture_table.clear(); // full rebuild (the fast path above keeps last frame's table)
+	tlas_instances.resize(p_snap.instances.size());
 	for (const GIInstance &gi : p_snap.instances) {
 		const GIMeshCPU &m = *p_snap.meshes[gi.mesh];
-		// Instance objects are pooled across frames (tens of thousands of allocations per frame otherwise).
-		if (insts.size() >= int64_t(inst_pool.size())) {
-			Ref<RDAccelerationStructureInstance> fresh;
-			fresh.instantiate();
-			inst_pool.push_back(fresh);
-		}
-		const Ref<RDAccelerationStructureInstance> &ri = inst_pool[insts.size()];
+		TlasInstance &ti = tlas_instances[inst_count];
 		uint32_t vertex_base = vertex_bases[gi.mesh];
-		ri->set_blas(meshes[gi.mesh].blas);
+		RID blas = meshes[gi.mesh].blas;
 		const DeformedGPU *def = nullptr;
 		if (gi.deformed && p_deformed) {
 			auto it = deformed_by_instance.find(gi.rs_instance.get_id());
 			if (it != deformed_by_instance.end() && (rt ? deformed[it->second].blas.is_valid() : !deformed[it->second].sources.empty() && deformed[it->second].sources[0].is_valid())) {
 				def = &deformed[it->second];
 				if (rt) {
-					ri->set_blas(def->blas);
+					blas = def->blas;
 				}
 				vertex_base = def->region_base;
 			}
 		}
-		ri->set_transform(gi.xform);
-		if (inst_mirror.size() <= size_t(insts.size())) {
-			inst_mirror.resize(insts.size() + 1);
-		}
-		inst_mirror[insts.size()].blas = (def && rt ? def->blas : meshes[gi.mesh].blas).get_id();
-		inst_mirror[insts.size()].xform = gi.xform;
-		inst_mirror[insts.size()].mask = gi.culled ? 0x00 : (gi.cast_shadow ? 0x03 : 0x01);
-		ri->set_id(uint32_t(rows.size()));
-		ri->set_hit_sbt_range(meshes[gi.mesh].sbt_range);
+		_pack_xform(gi.xform, ti.xform);
+		ti.blas = blas.get_id();
+		ti.id = uint32_t(rows.size());
+		ti.hit_sbt_range = meshes[gi.mesh].sbt_range;
+		ti.pad = 0;
 		bool alpha_tested = false;
 		for (size_t s = 0; s < m.surfaces.size(); s++) {
 			const GIMaterial &mat = (*gi.materials)[s];
@@ -895,14 +886,13 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 			}
 		}
 		// Alpha tested instances run the any-hit shader; everything else stays on the opaque fast path.
-		ri->set_mask(gi.culled ? 0x00 : (gi.cast_shadow ? 0x03 : 0x01)); // bit 1: shadow caster (shadow rays use mask 0x02); culled: never hit
-		ri->set_flags(RD::ACCELERATION_STRUCTURE_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT |
+		ti.mask = gi.culled ? 0x00 : (gi.cast_shadow ? 0x03 : 0x01); // bit 1: shadow caster (shadow rays use mask 0x02); culled: never hit
+		ti.flags = uint32_t(RD::ACCELERATION_STRUCTURE_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT |
 				(alpha_tested ? RD::ACCELERATION_STRUCTURE_INSTANCE_FORCE_NO_OPAQUE_BIT : RD::ACCELERATION_STRUCTURE_INSTANCE_FORCE_OPAQUE_BIT));
-		insts.push_back(ri);
+		inst_count++;
 	}
-	instances_used = uint32_t(insts.size());
-	inst_mirror.resize(insts.size());
-	insts_cached = insts;
+	instances_used = inst_count;
+	tlas_bytes.resize(int64_t(tlas_instances.size() * sizeof(TlasInstance)));
 	if (instances_used == 0) {
 		return false;
 	}
@@ -915,7 +905,8 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 		tlas = rd->tlas_create(tlas_capacity, RD::ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT);
 	}
 	if (rt) {
-		rd->tlas_build(tlas, insts);
+		memcpy(tlas_bytes.ptrw(), tlas_instances.data(), tlas_instances.size() * sizeof(TlasInstance));
+		rd->tlas_build_packed(tlas, tlas_bytes);
 		tlas_dirty = false;
 	}
 

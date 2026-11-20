@@ -64,6 +64,13 @@ private:
 	bool sky_from_environment = true;
 	bool print_stats = false;
 	uint64_t stats_next_usec = 0;
+	// Environment mode (engine patch 7): created by GoghotGIServer, enabled by Environment.goghot_gi_enabled
+	// of the view (quality from goghot_gi_quality), effects registered with the RenderingServer instead of
+	// being put in a compositor.
+	bool environment_mode = false;
+	bool effects_registered = false;
+	void _register_effects(bool p_register);
+	godot::Ref<godot::Environment> _view_environment() const;
 
 	godot::Ref<GoghotGIColorCapture> capture;
 	godot::Ref<GoghotHistogramExposure> exposure;
@@ -91,6 +98,8 @@ protected:
 public:
 	void _process(double p_delta) override;
 	void _process_gi(double p_delta);
+	void set_environment_mode(bool p_enable);
+	bool is_environment_mode() const { return environment_mode; }
 	double process_ms = 0.0; // CPU time of the last _process (main thread)
 
 	void set_enabled(bool p_enabled);

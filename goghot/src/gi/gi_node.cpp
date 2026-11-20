@@ -21,6 +21,7 @@
 #include <godot_cpp/classes/viewport.hpp>
 #include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/classes/world_environment.hpp>
+#include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/core/class_db.hpp>
 
 using namespace godot;
@@ -133,6 +134,9 @@ void GoghotGI::_sync_effects() {
 }
 
 void GoghotGI::_attach() {
+	if (environment_mode) {
+		return;
+	}
 	Node *root = _scene_root();
 	if (root == nullptr) {
 		return;
@@ -329,7 +333,78 @@ void GoghotGI::_process(double p_delta) {
 	process_ms = double(Time::get_singleton()->get_ticks_usec() - proc_t0) / 1000.0;
 }
 
+Ref<Environment> GoghotGI::_view_environment() const {
+	Ref<Environment> env;
+	if (Viewport *vp = get_viewport()) {
+		if (Camera3D *cam = vp->get_camera_3d()) {
+			env = cam->get_environment();
+		}
+		if (env.is_null() && vp->find_world_3d().is_valid()) {
+			env = vp->find_world_3d()->get_environment();
+		}
+	}
+	return env;
+}
+
+void GoghotGI::_register_effects(bool p_register) {
+	if (p_register == effects_registered || gi.is_null()) {
+		return;
+	}
+	TypedArray<RID> rids;
+	if (p_register) {
+		rids.push_back(gi->get_rid());
+		rids.push_back(capture->get_rid());
+	}
+	RenderingServer::get_singleton()->goghot_gi_set_effects(rids);
+	effects_registered = p_register;
+}
+
+void GoghotGI::set_environment_mode(bool p_enable) {
+	environment_mode = p_enable;
+	if (gi.is_valid()) {
+		gi->set_environment_effect(p_enable);
+	}
+	if (p_enable) {
+		set_editor_preview(true);
+	}
+}
+
 void GoghotGI::_process_gi(double p_delta) {
+	if (environment_mode) {
+		const uint64_t env_t0 = Time::get_singleton()->get_ticks_usec();
+		const Ref<Environment> env = _view_environment();
+		if (env.is_null() || !env->is_goghot_gi_enabled()) {
+			return; // not enabled for this view: no collection (the registered effects skip it too)
+		}
+		_register_effects(true);
+		static const int quality_of_env[3] = { QUALITY_LOW, QUALITY_MEDIUM, QUALITY_HIGH };
+		quality = quality_of_env[CLAMP(env->get_goghot_gi_quality(), 0, 2)];
+		_apply_quality();
+		if (sky_from_environment && gi.is_valid()) {
+			_update_units();
+			PackedColorArray sh;
+			gi->set_sky_color(_sky_radiance(env, sh));
+			gi->set_sky_energy(1.0f);
+			gi->set_sky_sh(sh);
+		}
+		const uint64_t c0 = Time::get_singleton()->get_ticks_usec();
+		GoghotGIScene::_process(p_delta);
+		if (print_stats) {
+			const uint64_t now = Time::get_singleton()->get_ticks_usec();
+			if (now >= stats_next_usec) {
+				stats_next_usec = now + 2000000;
+				UtilityFunctions::print(vformat("GoghotGI (environment): process %.2f ms, before collect %.2f ms, collect %.2f ms", double(now - env_t0) / 1000.0, double(c0 - env_t0) / 1000.0, double(now - c0) / 1000.0));
+			}
+		}
+		return;
+	}
+	{
+		// A GoghotGI node in the scene sleeps where the environment enables Goghot GI (that one renders it).
+		const Ref<Environment> env = _view_environment();
+		if (env.is_valid() && env->is_goghot_gi_enabled()) {
+			return;
+		}
+	}
 	const bool editor = Engine::get_singleton()->is_editor_hint();
 	if (editor && !editor_preview) {
 		if (attached.is_valid()) {
@@ -392,6 +467,7 @@ void GoghotGI::_notification(int p_what) {
 			break;
 		case NOTIFICATION_EXIT_TREE:
 			_detach();
+			_register_effects(false);
 			break;
 	}
 }

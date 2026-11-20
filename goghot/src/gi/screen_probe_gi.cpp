@@ -321,7 +321,7 @@ void GoghotScreenProbeGI::_dispatch(int64_t p_list, Pass p_pass, const TypedArra
 }
 
 void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, RenderData *p_render_data) {
-	if (p_effect_callback_type != EFFECT_CALLBACK_TYPE_PRE_OPAQUE || !ready || p_render_data == nullptr) {
+	if (p_effect_callback_type != EFFECT_CALLBACK_TYPE_PRE_OPAQUE || !ready || p_render_data == nullptr || !renders_environment(p_render_data->get_environment())) {
 		return;
 	}
 	Ref<RenderSceneBuffersRD> rbuf = p_render_data->get_render_scene_buffers();
@@ -354,6 +354,11 @@ void GoghotScreenProbeGI::_render_callback(int32_t p_effect_callback_type, Rende
 	_render_gi(p_render_data);
 	cb_end_us = Time::get_singleton()->get_ticks_usec();
 	render_cpu_ms = double(cb_end_us - cpu_t0) / 1000.0;
+}
+
+bool GoghotScreenProbeGI::renders_environment(const RID &p_env) const {
+	const bool env_gi = p_env.is_valid() && RenderingServer::get_singleton()->environment_get_goghot_gi_enabled(p_env);
+	return environment_effect ? env_gi : !env_gi;
 }
 
 void GoghotScreenProbeGI::_render_gi(RenderData *p_render_data) {
@@ -838,7 +843,7 @@ void GoghotScreenProbeGI::_bind_methods() {
 // ---------------------------------------------------------------------------
 
 void GoghotGIColorCapture::_render_callback(int32_t p_effect_callback_type, RenderData *p_render_data) {
-	if (p_effect_callback_type != EFFECT_CALLBACK_TYPE_POST_SKY || gi.is_null() || p_render_data == nullptr) {
+	if (p_effect_callback_type != EFFECT_CALLBACK_TYPE_POST_SKY || gi.is_null() || p_render_data == nullptr || !gi->renders_environment(p_render_data->get_environment())) {
 		return;
 	}
 	RenderSceneBuffersRD *rb = Object::cast_to<RenderSceneBuffersRD>(p_render_data->get_render_scene_buffers().ptr());

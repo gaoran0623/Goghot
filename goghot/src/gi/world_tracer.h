@@ -136,16 +136,21 @@ private:
 		uint32_t triangles = 0;
 	};
 	uint32_t deformed_cursor = 0; // round robin start of the BLAS rebuild budget
-	std::vector<godot::Ref<godot::RDAccelerationStructureInstance>> inst_pool;
-	// CPU mirror of what inst_pool[k] holds, so the fast path only calls the (cross-boundary) setters for
-	// instances that changed, and reuses the TLAS instance array of the last full build.
-	struct InstMirror {
-		uint64_t blas = 0;
-		godot::Transform3D xform;
-		uint32_t mask = 0;
+	// TLAS instances as RenderingDevice.tlas_build_packed takes them (engine patch 5), kept across frames:
+	// the fast path only rewrites the instances that changed, and builds without creating objects.
+	struct TlasInstance {
+		float xform[12]; // basis rows, origin
+		uint32_t id;
+		uint32_t mask;
+		int64_t hit_sbt_range;
+		uint32_t flags;
+		uint32_t pad;
+		uint64_t blas;
 	};
-	std::vector<InstMirror> inst_mirror;
-	godot::TypedArray<godot::RDAccelerationStructureInstance> insts_cached;
+	static_assert(sizeof(TlasInstance) == 80, "tlas_build_packed layout");
+	std::vector<TlasInstance> tlas_instances;
+	godot::PackedByteArray tlas_bytes;
+	static void _pack_xform(const godot::Transform3D &p_xform, float r_out[12]);
 	bool tlas_dirty = true; // TLAS must be built even if no instance changed (new TLAS, full rows build)
 	std::unordered_map<uint64_t, godot::RID> rd_texture_cache; // texture RID -> RD texture (sRGB view)
 	uint64_t rows_signature = 0; // instance structure of the last full rows build (fast path when equal)

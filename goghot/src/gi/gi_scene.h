@@ -204,6 +204,24 @@ protected:
 	std::unordered_map<uint64_t, uint32_t> scratch_index;
 	std::unordered_map<uint64_t, std::weak_ptr<const std::vector<GIMaterial>>> material_sets; // interned by content hash
 	bool _refresh_due(uint64_t p_id) const;
+	// Engine instance feed (patch 5, RenderingServer.scenario_goghot_feed_poll): which RenderingServer
+	// instances changed since the last update. With it, a node is read only when one of its instances
+	// changed (or by a slow safety refresh); an instance whose transform alone changed updates its
+	// node's single instance without touching the node.
+	struct FeedPrev {
+		uint64_t object = 0, base = 0, attrs = 0; // attrs: hash of flags, layers, material overrides
+	};
+	struct FeedMove {
+		uint64_t rs_instance = 0;
+		godot::Transform3D xform;
+	};
+	godot::RID feed_scenario;
+	bool feed_active = false;
+	std::unordered_map<uint64_t, FeedPrev> feed_prev; // RS instance id
+	std::unordered_set<uint64_t> feed_dirty; // node ids to re-read this update
+	std::unordered_map<uint64_t, FeedMove> feed_moves; // node id -> new transform of its instance
+	uint64_t feed_records = 0; // last update (stats)
+	void _poll_feed(godot::Node *p_root);
 	void _notification(int p_what);
 	std::shared_ptr<const GIMeshCPU> _get_mesh(const godot::Ref<godot::Resource> &p_mesh);
 
