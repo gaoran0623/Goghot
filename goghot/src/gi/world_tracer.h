@@ -33,6 +33,7 @@ public:
 		uint32_t last_rebuild_added = 0, last_rebuild_removed = 0; // meshes vs the previous build
 		bool last_rebuild_deformed_changed = false;
 		double rows_ms = 0.0, tlas_ms = 0.0, upload_ms = 0.0; // update_scene phases
+		uint64_t rows_fast = 0, rows_full = 0; // fast / full rows builds since start
 		uint32_t last_rebuild_new_blas = 0; // BLASes built by the last rebuild (others reused)
 	};
 	Stats stats;

@@ -702,6 +702,8 @@ Dictionary GoghotScreenProbeGI::get_stats() const {
 	d["rows_ms"] = s.rows_ms;
 	d["tlas_ms"] = s.tlas_ms;
 	d["upload_ms"] = s.upload_ms;
+	d["rows_fast"] = int64_t(s.rows_fast);
+	d["rows_full"] = int64_t(s.rows_full);
 	d["update_ms"] = s.update_ms;
 	d["rebuild_ms"] = s.rebuild_ms;
 	d["rebuilds"] = int64_t(s.rebuilds);

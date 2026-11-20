@@ -664,8 +664,10 @@ bool GIWorldTracer::_update_scene(const GISceneSnapshot &p_snap, bool p_deformed
 		stats.rows_ms = double(fph1 - ph0) / 1000.0;
 		stats.tlas_ms = double(Time::get_singleton()->get_ticks_usec() - fph1) / 1000.0;
 		_update_lights(p_snap);
+		stats.rows_fast++;
 		return true;
 	}
+	stats.rows_full++;
 	rows_signature = sig;
 	cached_instance_count = p_snap.instances.size();
 	texture_table.clear(); // full rebuild (the fast path above keeps last frame's table)
