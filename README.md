@@ -1,5 +1,7 @@
 # Goghot
 
+**中文** | [English](README.en.md)
+
 **Goghot 是 Godot 的一個分支，目標是做出接近 Unreal Lumen 的全自動即時全域光照（GI）。** 不烘焙：擺好太陽、天空和燈光，按物理單位打光，室內、室外、室內外過渡都正確，場景可以隨時移動、增刪物件、開關燈。這是通用方案，不針對特定遊戲調整，所有場景共用同一套預設參數。
 
 基於 Godot `master`（4.8-beta）。GI 主體都在 GDExtension（[`goghot/`](goghot/)）裡；引擎只改了少量、各自獨立的補丁（見[引擎補丁](#引擎補丁)）。
@@ -122,7 +124,7 @@ RTX 3060 級的顯卡、沒有光追的顯卡（B 檔）、AMD 和 Intel 都**�
 - **B 檔**偏暗、偏模糊，成本是 A 檔的 2–3 倍。
 - **不支援**：ShaderMaterial 的命中點材質（要做 surface cache 才能解決）、自訂天空 shader、折射。
 - **其他限制**：只支援 Forward+ 和單一視角（不支援 VR 多視角）。
-- 更多細節見 [`goghot/KNOWN_ISSUES.md`](goghot/KNOWN_ISSUES.md) 和各階段的報告。
+- 更多細節見 [`goghot/KNOWN_ISSUES.md`](goghot/KNOWN_ISSUES.md)。
 
 ## 編譯
 
